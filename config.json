@@ -1,0 +1,19 @@
+{
+    "port": 9222,
+    "pollIntervalMs": 500,
+    "buttonTexts": [
+        "Accept",
+        "Run",
+        "Always allow",
+        "Yes",
+        "Confirm",
+        "Allow",
+        "Accept All",
+        "Approve",
+        "Allow Once",
+        "Allow This Conversation"
+    ],
+    "autoReconnect": true,
+    "reconnectIntervalMs": 3000,
+    "logLevel": "info"
+}
