@@ -2,16 +2,9 @@
     "port": 9222,
     "pollIntervalMs": 500,
     "buttonTexts": [
-        "Accept",
         "Run",
-        "Always allow",
-        "Yes",
-        "Confirm",
-        "Allow",
-        "Accept All",
-        "Approve",
-        "Allow Once",
-        "Allow This Conversation"
+        "Allow This Conversation",
+        "Allow Once"
     ],
     "usePersistentMode": true,
     "autoReconnect": true,

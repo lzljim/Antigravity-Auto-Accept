@@ -102,7 +102,13 @@ function buildDetectionScript(buttonTexts) {
             for (const target of targetTexts) {
                 const match = candidates.find(c => c.text === target);
                 if (match) {
-                    match.btn.setAttribute(MARKER, Date.now().toString());
+                    // 标记所有匹配的按钮（包括低优先级的），防止后续触发再点击
+                    const ts = Date.now().toString();
+                    for (const c of candidates) {
+                        if (targetTexts.includes(c.text)) {
+                            c.btn.setAttribute(MARKER, ts);
+                        }
+                    }
                     match.btn.click();
                     return [match.text];
                 }
@@ -153,7 +159,13 @@ function buildObserverScript(buttonTexts) {
                 for (const target of targetTexts) {
                     const match = candidates.find(c => c.text === target);
                     if (match) {
-                        match.btn.setAttribute(MARKER, Date.now().toString());
+                        // 标记所有匹配的按钮（包括低优先级的），防止 Observer 再次触发时点击
+                        const ts = Date.now().toString();
+                        for (const c of candidates) {
+                            if (targetTexts.includes(c.text)) {
+                                c.btn.setAttribute(MARKER, ts);
+                            }
+                        }
                         match.btn.click();
                         return [match.text];
                     }
