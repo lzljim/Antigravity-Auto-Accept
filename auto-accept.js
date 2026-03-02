@@ -505,7 +505,7 @@ async function mainLoop() {
                 const connInfo = USE_PERSISTENT_MODE
                     ? `，持久连接 ${targetManager.connections.size} 个`
                     : '';
-                log(`💓 运行中... 已扫描 ${pollCount} 次，检测到 ${targetCount} 个渲染进程${connInfo}`);
+                log(`💓 运行中... 检测到 ${targetCount} 个渲染进程${connInfo}`);
             }
         } catch (err) {
             consecutiveErrors++;
