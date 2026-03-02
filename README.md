@@ -104,7 +104,7 @@ node auto-accept.js
 {
   "port": 9222,             // CDP 调试端口，与启动参数一致
   "pollIntervalMs": 500,    // 轮询间隔（毫秒），越小响应越快但 CPU 占用越高
-  "buttonTexts": [           // 要自动点击的按钮文本白名单（不区分大小写）
+  "buttonTexts": [           // 按钮白名单（顺序 = 优先级，靠前的优先点击）
     "Accept",
     "Run",
     "Always allow",
@@ -113,7 +113,9 @@ node auto-accept.js
     "Allow",
     "Accept All",
     "Run command",
-    "Approve"
+    "Approve",
+    "Allow Once",              // 优先级高于 Allow This Conversation
+    "Allow This Conversation"
   ],
   "usePersistentMode": true, // 持久连接 + MutationObserver 模式（推荐，支持多会话）
   "autoReconnect": true,     // IDE 关闭/重启后是否自动重连

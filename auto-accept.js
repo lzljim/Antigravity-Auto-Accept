@@ -75,6 +75,7 @@ function error(msg) {
 function buildDetectionScript(buttonTexts) {
     const textsJSON = JSON.stringify(buttonTexts.map(t => t.toLowerCase()));
 
+    // buttonTexts 的顺序即优先级（靠前 = 优先级高）
     return `
         (() => {
             const targetTexts = ${textsJSON};
@@ -87,25 +88,27 @@ function buildDetectionScript(buttonTexts) {
                     .toLowerCase();
             }
 
-            function isMatch(rawText) {
-                return targetTexts.some(t => normalize(rawText) === t);
-            }
-
-            const clicked = [];
+            // 收集所有可点击的按钮及其归一化文本
             const allButtons = document.querySelectorAll('button, [role="button"]');
+            const candidates = [];
             for (const btn of allButtons) {
                 if (btn.disabled) continue;
                 if (btn.hasAttribute(MARKER)) continue;
-
-                const text = (btn.textContent || '').trim();
-                if (!isMatch(text)) continue;
-
-                btn.setAttribute(MARKER, Date.now().toString());
-                btn.click();
-                clicked.push(normalize(text));
+                const text = normalize((btn.textContent || '').trim());
+                candidates.push({ btn, text });
             }
 
-            return clicked.length > 0 ? clicked : null;
+            // 按配置优先级遍历：找到最高优先级的匹配按钮就只点它
+            for (const target of targetTexts) {
+                const match = candidates.find(c => c.text === target);
+                if (match) {
+                    match.btn.setAttribute(MARKER, Date.now().toString());
+                    match.btn.click();
+                    return [match.text];
+                }
+            }
+
+            return null;
         })()
     `;
 }
@@ -134,25 +137,28 @@ function buildObserverScript(buttonTexts) {
                     .toLowerCase();
             }
 
-            function isMatch(rawText) {
-                return targetTexts.some(t => normalize(rawText) === t);
-            }
 
             function scanAndClick(root) {
-                const clicked = [];
+                // 收集所有可点击的按钮
                 const buttons = (root || document).querySelectorAll('button, [role="button"]');
+                const candidates = [];
                 for (const btn of buttons) {
                     if (btn.disabled) continue;
                     if (btn.hasAttribute(MARKER)) continue;
-
-                    const text = (btn.textContent || '').trim();
-                    if (!isMatch(text)) continue;
-
-                    btn.setAttribute(MARKER, Date.now().toString());
-                    btn.click();
-                    clicked.push(normalize(text));
+                    const text = normalize((btn.textContent || '').trim());
+                    candidates.push({ btn, text });
                 }
-                return clicked;
+
+                // 按配置优先级遍历：找到最高优先级的匹配按钮就只点它
+                for (const target of targetTexts) {
+                    const match = candidates.find(c => c.text === target);
+                    if (match) {
+                        match.btn.setAttribute(MARKER, Date.now().toString());
+                        match.btn.click();
+                        return [match.text];
+                    }
+                }
+                return [];
             }
 
             // 先扫描一遍现有 DOM（处理已经存在但未被点击的按钮）
