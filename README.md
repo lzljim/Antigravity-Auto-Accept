@@ -1,8 +1,8 @@
 # Antigravity Auto-Accept
 
-通过 Chrome DevTools Protocol (CDP) 自动确认 Antigravity IDE 中 Agent 面板的操作按钮。
+通过 Chrome DevTools Protocol (CDP) 自动确认 Antigravity IDE 中 Agent 面板的操作按钮。**支持多会话并行**，后台会话中的按钮也能被自动点击。
 
-> **原理**：连接 IDE 内置 Chromium 的调试端口，遍历所有渲染进程（包括 OOPIF 隔离沙盒），在 DOM 中检测匹配的按钮并自动 `click()`。不移动鼠标、不抢焦点、最小化窗口也能正常工作。
+> **原理**：连接 IDE 内置 Chromium 的调试端口，对所有渲染进程（包括 OOPIF 隔离沙盒）建立持久连接，注入 MutationObserver 实时监听 DOM 变化，按钮出现时即刻 `click()`。不移动鼠标、不抢焦点、最小化窗口也能正常工作。
 
 ---
 
@@ -115,6 +115,7 @@ node auto-accept.js
     "Run command",
     "Approve"
   ],
+  "usePersistentMode": true, // 持久连接 + MutationObserver 模式（推荐，支持多会话）
   "autoReconnect": true,     // IDE 关闭/重启后是否自动重连
   "reconnectIntervalMs": 3000, // 重连检测间隔（毫秒）
   "logLevel": "info"         // 日志级别：debug（详细）/ info（正常）/ silent（静默）
@@ -159,6 +160,16 @@ netstat -ano | findstr :9222
 > - 调试端口仅绑定在 `127.0.0.1`（本机），外部无法访问
 > - 但本机的其他程序理论上可以连接此端口，请注意本地安全环境
 > - 不建议在公共网络或不受信任的环境中使用
+
+### Q: 多会话场景下后台会话的按钮不会被点击？
+
+确保 `config.json` 中 `usePersistentMode` 设置为 `true`（默认开启）。该模式会：
+
+1. 对每个渲染进程保持持久 CDP 连接
+2. 注入 MutationObserver 实时监听 DOM 变化
+3. 后台 webview 中的按钮也能被即时检测并点击
+
+如遇到兼容问题，设为 `false` 可退回传统轮询模式。
 
 ### Q: 我想让脚本开机自启动
 

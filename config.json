@@ -13,6 +13,7 @@
         "Allow Once",
         "Allow This Conversation"
     ],
+    "usePersistentMode": true,
     "autoReconnect": true,
     "reconnectIntervalMs": 3000,
     "logLevel": "info"
