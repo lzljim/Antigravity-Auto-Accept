@@ -255,35 +255,6 @@ function buildObserverScript(buttonTexts) {
                 attributeFilter: ['disabled', 'class', 'style']
             });
 
-            // ---- 自动滚底：触发虚拟滚动渲染未显示的按钮 ----
-            function scrollToBottom() {
-                // 尝试多种选择器匹配 VS Code 系 Agent 面板的可滚动容器
-                const selectors = [
-                    '.monaco-scrollable-element',
-                    '[class*="chat"] [class*="scroll"]',
-                    '[class*="agent"] [class*="scroll"]',
-                    '[class*="conversation"] [class*="scroll"]',
-                    '[role="list"]',
-                    '[role="log"]'
-                ];
-                const scrolled = new Set();
-                for (const sel of selectors) {
-                    for (const el of document.querySelectorAll(sel)) {
-                        if (scrolled.has(el)) continue;
-                        // 只处理确实有滚动空间的容器
-                        if (el.scrollHeight > el.clientHeight + 10) {
-                            el.scrollTop = el.scrollHeight;
-                            scrolled.add(el);
-                        }
-                    }
-                }
-            }
-
-            // 每秒滚一次底部，触发懒加载渲染
-            window.__autoAcceptScrollTimer = setInterval(scrollToBottom, 1000);
-            // 初始也滚一次
-            scrollToBottom();
-
             window.__autoAcceptObserver = observer;
 
             return {
