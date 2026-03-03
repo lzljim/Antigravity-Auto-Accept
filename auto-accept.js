@@ -58,16 +58,33 @@ function loadSessionNames() {
     }
 }
 
-function saveSessionName(uuid, name) {
+function saveSessionName(uuid, name, original) {
     const names = loadSessionNames();
     if (name && name.trim()) {
-        names[uuid] = name.trim();
+        names[uuid] = { name: name.trim(), original: original || names[uuid]?.original || '' };
     } else {
         delete names[uuid];
     }
     fs.writeFileSync(SESSION_NAMES_PATH, JSON.stringify(names, null, 2), 'utf-8');
     log(`📝 会话名称已保存: ${uuid.substring(0, 8)}... → "${name}"`);
     return names;
+}
+
+/**
+ * 从 session-names.json 获取“原始名称 → 自定义名称”映射
+ */
+function getNameReplacements() {
+    const names = loadSessionNames();
+    const replacements = {};
+    for (const [uuid, entry] of Object.entries(names)) {
+        // 兼容旧格式（纯字符串）
+        const customName = typeof entry === 'string' ? entry : entry.name;
+        const originalName = typeof entry === 'string' ? null : entry.original;
+        if (originalName && customName) {
+            replacements[originalName] = customName;
+        }
+    }
+    return replacements;
 }
 
 // ============================================================
@@ -295,12 +312,14 @@ function buildRenamerScript(nameMap) {
                 for (const span of spans) {
                     const testId = span.getAttribute('data-testid');
                     const uuid = testId.replace('convo-pill-', '');
-                    if (nameMap[uuid] && span.textContent !== nameMap[uuid]) {
+                    const entry = nameMap[uuid];
+                    const customName = typeof entry === 'string' ? entry : entry?.name;
+                    if (customName && span.textContent !== customName) {
                         // 保存原始名称
                         if (!span.hasAttribute('data-original-name')) {
                             span.setAttribute('data-original-name', span.textContent);
                         }
-                        span.textContent = nameMap[uuid];
+                        span.textContent = customName;
                     }
                 }
             }
@@ -341,9 +360,9 @@ function buildRenamerScript(nameMap) {
                         if (newName && newName !== originalName) {
                             span.textContent = newName;
                             span.setAttribute('data-original-name', originalName);
-                            nameMap[uuid] = newName;
-                            // 通过 binding 回调 Node.js 侧保存
-                            try { window.__saveSessionName(JSON.stringify({ uuid, name: newName })); } catch(_) {}
+                            nameMap[uuid] = { name: newName, original: originalName };
+                            // 通过 binding 回调 Node.js 侧保存（带上原始名称）
+                            try { window.__saveSessionName(JSON.stringify({ uuid, name: newName, original: originalName })); } catch(_) {}
                         } else if (!newName) {
                             // 空名称 = 恢复原始名称
                             span.textContent = originalName;
@@ -404,6 +423,80 @@ function buildRenamerScript(nameMap) {
 
             window.__sessionRenamer = { observer, nameMap };
 
+            return { status: 'injected' };
+        })()
+    `;
+}
+
+// ============================================================
+//  生成全局名称替换脚本（注入到所有 target）
+// ============================================================
+
+function buildNameReplacerScript(replacements) {
+    if (Object.keys(replacements).length === 0) return null;
+
+    const replacementsJSON = JSON.stringify(replacements);
+
+    return `
+        (() => {
+            const replacements = ${replacementsJSON};
+            const REPLACER_MARKER = 'data-name-replaced';
+            const originals = Object.keys(replacements);
+            if (originals.length === 0) return { status: 'empty' };
+
+            function replaceNames() {
+                // 扫描所有可能包含会话名称的文本节点
+                const walker = document.createTreeWalker(
+                    document.body || document.documentElement,
+                    NodeFilter.SHOW_TEXT,
+                    null
+                );
+
+                const replacedNodes = [];
+                let node;
+                while (node = walker.nextNode()) {
+                    // 跳过 script/style/textarea
+                    const parent = node.parentElement;
+                    if (!parent) continue;
+                    const tag = parent.tagName;
+                    if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'TEXTAREA' || tag === 'INPUT') continue;
+
+                    const text = node.nodeValue;
+                    if (!text || text.trim().length === 0) continue;
+
+                    for (const original of originals) {
+                        if (text.includes(original)) {
+                            node.nodeValue = text.replace(original, replacements[original]);
+                            // 标记父元素防止重复处理
+                            if (parent && !parent.hasAttribute(REPLACER_MARKER)) {
+                                parent.setAttribute(REPLACER_MARKER, '1');
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 防止重复注入
+            if (window.__nameReplacer) {
+                // 更新映射
+                Object.assign(window.__nameReplacer.replacements, replacements);
+                replaceNames();
+                return { status: 'updated' };
+            }
+
+            replaceNames();
+
+            // MutationObserver 监听 DOM 变化
+            const observer = new MutationObserver((mutations) => {
+                let needReplace = false;
+                for (const m of mutations) {
+                    if (m.addedNodes.length > 0) { needReplace = true; break; }
+                }
+                if (needReplace) replaceNames();
+            });
+            observer.observe(document.documentElement, { childList: true, subtree: true });
+
+            window.__nameReplacer = { observer, replacements };
             return { status: 'injected' };
         })()
     `;
@@ -501,8 +594,8 @@ class TargetManager {
                 Runtime.bindingCalled(({ name, payload }) => {
                     if (name === '__saveSessionName') {
                         try {
-                            const { uuid, name: newName } = JSON.parse(payload);
-                            saveSessionName(uuid, newName);
+                            const { uuid, name: newName, original } = JSON.parse(payload);
+                            saveSessionName(uuid, newName, original);
                         } catch (err) {
                             error(`保存会话名称失败: ${err.message}`);
                         }
@@ -542,6 +635,19 @@ class TargetManager {
                 } else if (response?.status === 'already_injected') {
                     debug(`Observer 已存在，跳过: ${targetInfo.title || targetInfo.id}`);
                 }
+            }
+
+            // 所有 target 都注入全局名称替换脚本
+            const replacements = getNameReplacements();
+            const replacerScript = buildNameReplacerScript(replacements);
+            if (replacerScript) {
+                try {
+                    await Runtime.evaluate({
+                        expression: replacerScript,
+                        returnByValue: true,
+                        awaitPromise: false
+                    });
+                } catch (_) { /* 忽略替换失败 */ }
             }
 
             // 监听连接断开事件
