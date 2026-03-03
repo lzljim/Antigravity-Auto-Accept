@@ -96,6 +96,19 @@ node auto-accept.js
 
 ---
 
+## ✨ 会话重命名
+
+脚本运行后，你可以在 Antigravity 侧边栏的会话列表中**双击会话标题**编辑名称：
+
+1. 双击会话标题 → 出现输入框
+2. 输入新名称，按 **Enter** 保存（或 **Escape** 取消）
+3. 名称自动保存到 `session-names.json`，重启脚本后自动恢复
+
+> [!TIP]
+> 输入空名称并回车可以恢复原始名称。
+
+---
+
 ## ⚙️ 配置说明
 
 编辑 `config.json` 来自定义行为：
@@ -192,6 +205,7 @@ node auto-accept.js
 ```
 ├── auto-accept.js    # 核心脚本
 ├── config.json       # 配置文件
+├── session-names.json # 会话自定义名称映射
 ├── package.json      # 项目配置
 └── README.md         # 使用说明（本文件）
 ```

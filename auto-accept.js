@@ -45,6 +45,32 @@ const LOG_LEVEL = config.logLevel ?? 'info'; // 'debug' | 'info' | 'silent'
 const USE_PERSISTENT_MODE = config.usePersistentMode ?? true; // 持久连接模式
 
 // ============================================================
+//  会话名称映射（持久化）
+// ============================================================
+
+const SESSION_NAMES_PATH = path.join(__dirname, 'session-names.json');
+
+function loadSessionNames() {
+    try {
+        return JSON.parse(fs.readFileSync(SESSION_NAMES_PATH, 'utf-8'));
+    } catch (_) {
+        return {};
+    }
+}
+
+function saveSessionName(uuid, name) {
+    const names = loadSessionNames();
+    if (name && name.trim()) {
+        names[uuid] = name.trim();
+    } else {
+        delete names[uuid];
+    }
+    fs.writeFileSync(SESSION_NAMES_PATH, JSON.stringify(names, null, 2), 'utf-8');
+    log(`📝 会话名称已保存: ${uuid.substring(0, 8)}... → "${name}"`);
+    return names;
+}
+
+// ============================================================
 //  日志工具
 // ============================================================
 
@@ -252,6 +278,138 @@ function buildObserverScript(buttonTexts) {
 }
 
 // ============================================================
+//  生成会话重命名脚本（注入到 Manager target）
+// ============================================================
+
+function buildRenamerScript(nameMap) {
+    const nameMapJSON = JSON.stringify(nameMap);
+
+    return `
+        (() => {
+            const nameMap = ${nameMapJSON};
+            const RENAMER_MARKER = 'data-renamer-bound';
+
+            // 应用名称映射：将 span 的 textContent 替换为自定义名称
+            function applyNames() {
+                const spans = document.querySelectorAll('[data-testid^="convo-pill-"]');
+                for (const span of spans) {
+                    const testId = span.getAttribute('data-testid');
+                    const uuid = testId.replace('convo-pill-', '');
+                    if (nameMap[uuid] && span.textContent !== nameMap[uuid]) {
+                        // 保存原始名称
+                        if (!span.hasAttribute('data-original-name')) {
+                            span.setAttribute('data-original-name', span.textContent);
+                        }
+                        span.textContent = nameMap[uuid];
+                    }
+                }
+            }
+
+            // 为标题 span 绑定双击编辑事件
+            function bindDblClick(span) {
+                if (span.hasAttribute(RENAMER_MARKER)) return;
+                span.setAttribute(RENAMER_MARKER, '1');
+
+                span.addEventListener('dblclick', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+
+                    const testId = span.getAttribute('data-testid');
+                    const uuid = testId.replace('convo-pill-', '');
+                    const currentText = span.textContent;
+                    const originalName = span.getAttribute('data-original-name') || currentText;
+
+                    // 创建 input 替换 span
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.value = currentText;
+                    input.className = span.className;
+                    input.style.cssText = 'background:var(--vscode-input-background,#3c3c3c);color:var(--vscode-input-foreground,#ccc);border:1px solid var(--vscode-focusBorder,#007fd4);border-radius:3px;padding:1px 4px;outline:none;width:100%;font-size:inherit;';
+
+                    const parent = span.parentElement;
+                    parent.replaceChild(input, span);
+                    input.focus();
+                    input.select();
+
+                    let committed = false;
+
+                    function commit() {
+                        if (committed) return;
+                        committed = true;
+                        const newName = input.value.trim();
+                        if (newName && newName !== originalName) {
+                            span.textContent = newName;
+                            span.setAttribute('data-original-name', originalName);
+                            nameMap[uuid] = newName;
+                            // 通过 binding 回调 Node.js 侧保存
+                            try { window.__saveSessionName(JSON.stringify({ uuid, name: newName })); } catch(_) {}
+                        } else if (!newName) {
+                            // 空名称 = 恢复原始名称
+                            span.textContent = originalName;
+                            span.removeAttribute('data-original-name');
+                            delete nameMap[uuid];
+                            try { window.__saveSessionName(JSON.stringify({ uuid, name: '' })); } catch(_) {}
+                        } else {
+                            span.textContent = currentText;
+                        }
+                        parent.replaceChild(span, input);
+                    }
+
+                    function cancel() {
+                        if (committed) return;
+                        committed = true;
+                        span.textContent = currentText;
+                        parent.replaceChild(span, input);
+                    }
+
+                    input.addEventListener('keydown', (ke) => {
+                        if (ke.key === 'Enter') { ke.preventDefault(); commit(); }
+                        if (ke.key === 'Escape') { ke.preventDefault(); cancel(); }
+                        ke.stopPropagation();
+                    });
+                    input.addEventListener('blur', () => commit());
+                }, true);
+            }
+
+            // 绑定所有现有的会话标题
+            function bindAll() {
+                const spans = document.querySelectorAll('[data-testid^="convo-pill-"]');
+                for (const span of spans) {
+                    bindDblClick(span);
+                }
+            }
+
+            // 防止重复注入
+            if (window.__sessionRenamer) {
+                // 更新名称映射并重新应用
+                Object.assign(window.__sessionRenamer.nameMap, nameMap);
+                applyNames();
+                bindAll();
+                return { status: 'updated' };
+            }
+
+            // 初始应用
+            applyNames();
+            bindAll();
+
+            // MutationObserver: 会话列表可能因虚拟滚动重新渲染
+            const observer = new MutationObserver(() => {
+                applyNames();
+                bindAll();
+            });
+
+            const container = document.querySelector('[data-testid="conversation-view"]') || document.documentElement;
+            observer.observe(container, { childList: true, subtree: true });
+
+            window.__sessionRenamer = { observer, nameMap };
+
+            return { status: 'injected' };
+        })()
+    `;
+}
+
+// ============================================================
 //  持久连接管理器（TargetManager）
 // ============================================================
 
@@ -331,23 +489,59 @@ class TargetManager {
                 }
             });
 
-            // 注入 MutationObserver 脚本
-            const result = await Runtime.evaluate({
-                expression: this.observerScript,
-                returnByValue: true,
-                awaitPromise: false
-            });
+            // 判断是否为 Manager target（会话列表面板）
+            const isManager = targetInfo.title === 'Manager';
 
-            const response = result?.result?.value;
-            if (response?.status === 'injected') {
-                debug(`Observer 已注入: ${targetInfo.title || targetInfo.id}`);
-                if (response.initialClicked) {
-                    for (const text of response.initialClicked) {
-                        log(`✅ 自动点击了: [${text}]  (target: ${targetInfo.title || targetInfo.url || 'unknown'})`);
+            if (isManager) {
+                // ---- Manager target: 注入会话重命名脚本 ----
+                try {
+                    await Runtime.addBinding({ name: '__saveSessionName' });
+                } catch (_) { /* binding 可能已存在 */ }
+
+                Runtime.bindingCalled(({ name, payload }) => {
+                    if (name === '__saveSessionName') {
+                        try {
+                            const { uuid, name: newName } = JSON.parse(payload);
+                            saveSessionName(uuid, newName);
+                        } catch (err) {
+                            error(`保存会话名称失败: ${err.message}`);
+                        }
                     }
+                });
+
+                const sessionNames = loadSessionNames();
+                const renamerScript = buildRenamerScript(sessionNames);
+                const renamerResult = await Runtime.evaluate({
+                    expression: renamerScript,
+                    returnByValue: true,
+                    awaitPromise: false
+                });
+
+                const renamerStatus = renamerResult?.result?.value?.status;
+                if (renamerStatus === 'injected') {
+                    log(`🏷️  会话重命名已注入 Manager (双击会话标题可编辑)`);
+                } else if (renamerStatus === 'updated') {
+                    debug(`会话重命名映射已更新`);
                 }
-            } else if (response?.status === 'already_injected') {
-                debug(`Observer 已存在，跳过: ${targetInfo.title || targetInfo.id}`);
+            } else {
+                // ---- 普通 target: 注入按钮自动点击 Observer ----
+                const result = await Runtime.evaluate({
+                    expression: this.observerScript,
+                    returnByValue: true,
+                    awaitPromise: false
+                });
+
+                const response = result?.result?.value;
+                if (response?.status === 'injected') {
+                    debug(`Observer 已注入: ${targetInfo.title || targetInfo.id}`);
+                    if (response.initialClicked) {
+                        for (const text of response.initialClicked) {
+                            log(`✅ 自动点击了: [${text}]  (target: ${targetInfo.title || targetInfo.url || 'unknown'})`);
+                        }
+                    }
+                } else if (response?.status === 'already_injected') {
+                    debug(`Observer 已存在，跳过: ${targetInfo.title || targetInfo.id}`);
+                }
             }
 
             // 监听连接断开事件
