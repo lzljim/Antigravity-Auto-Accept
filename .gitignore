@@ -27,3 +27,10 @@ Desktop.ini
 # Build output
 dist/
 build/
+
+# User local config (use *.example as template)
+config.json
+session-names.json
+
+# Temp explore scripts
+_explore.js
