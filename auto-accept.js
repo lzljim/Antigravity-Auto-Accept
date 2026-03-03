@@ -399,16 +399,37 @@ function buildRenamerScript(nameMap) {
                 }
             }
 
-            // 防止重复注入
+            // 重新注入时：清除旧事件绑定，强制重新绑定（确保使用最新代码）
             if (window.__sessionRenamer) {
-                // 更新名称映射并重新应用
-                Object.assign(window.__sessionRenamer.nameMap, nameMap);
-                applyNames();
-                bindAll();
-                return { status: 'updated' };
+                window.__sessionRenamer.observer?.disconnect();
+                // 清除旧的事件绑定标记，bindAll 会重新绑定
+                document.querySelectorAll('[' + RENAMER_MARKER + ']').forEach(el => {
+                    el.removeAttribute(RENAMER_MARKER);
+                    // 克隆节点以移除旧事件监听器
+                    const clone = el.cloneNode(true);
+                    el.parentNode?.replaceChild(clone, el);
+                });
             }
 
-            // 初始应用
+            // 初始扫描：从 DOM 捕获原始名称并回传 Node.js 保存
+            function captureOriginals() {
+                const spans = document.querySelectorAll('[data-testid^="convo-pill-"]');
+                for (const span of spans) {
+                    const testId = span.getAttribute('data-testid');
+                    const uuid = testId.replace('convo-pill-', '');
+                    const entry = nameMap[uuid];
+                    const customName = typeof entry === 'string' ? entry : entry?.name;
+                    const storedOriginal = typeof entry === 'string' ? null : entry?.original;
+                    // 如果有自定义名称但没有存储原始名称，从 DOM 捕获
+                    if (customName && (!storedOriginal) && span.textContent !== customName) {
+                        const domOriginal = span.textContent;
+                        try { window.__saveSessionName(JSON.stringify({ uuid, name: customName, original: domOriginal })); } catch(_) {}
+                    }
+                }
+            }
+            captureOriginals();
+
+            // 应用名称 + 绑定事件
             applyNames();
             bindAll();
 
