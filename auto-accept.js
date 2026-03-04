@@ -156,6 +156,9 @@ function buildObserverScript(buttonTexts, autoRetryConfig) {
 
     return `
         (() => {
+            // 重置重试计数器（脚本重新注入时归零）
+            window.__retryCount = 0;
+
             // 防止重复注入
             if (window.__autoAcceptObserver) {
                 return { status: 'already_injected' };
@@ -173,72 +176,97 @@ function buildObserverScript(buttonTexts, autoRetryConfig) {
             }
 
             // 执行模型切换并重试
+            const MAX_RETRIES = autoRetry.maxRetries || 3;
+
             async function doAutoRetry(btn) {
                 if (window.__isRetrying) return;
+                
+                // 检查重试上限
+                window.__retryCount++;
+                if (window.__retryCount > MAX_RETRIES) {
+                    console.log('[AUTO-RETRY] \u2757 已达最大重试次数(' + MAX_RETRIES + ')，停止自动重试');
+                    return;
+                }
+                
                 window.__isRetrying = true;
                 
                 try {
-                    console.log("[AUTO-RETRY] 检测到失败，开始自动切换模型...");
+                    console.log('[AUTO-RETRY] \u{1f504} 第 ' + window.__retryCount + '/' + MAX_RETRIES + ' 次重试，正在切换模型...');
                     
-                    // 1. 查找模型选择器触发按钮 (状态栏里的 span)
-                    const spans = Array.from(document.querySelectorAll('span.select-none.text-ellipsis'));
-                    const trigger = spans.find(s => s.parentElement?.className.includes('items-center'));
+                    // 1. 查找模型选择器 (输入栏底部的模型名 span)
+                    const trigger = document.querySelector('span.min-w-0.select-none.overflow-hidden.text-ellipsis');
                     
                     if (!trigger || !autoRetry.modelFallback || autoRetry.modelFallback.length === 0) {
-                        console.log("[AUTO-RETRY] 找不到模型选择器或 fallback 配置为空，直接重试");
+                        console.log('[AUTO-RETRY] 找不到模型选择器或 fallback 为空，直接重试');
                         btn.click();
                         return;
                     }
 
-                    const currentModelText = trigger.textContent;
-                    let nextModel = autoRetry.modelFallback[0];
+                    // 2. 按 fallback 顺序选择下一个模型
+                    const currentModelText = trigger.textContent || '';
+                    console.log('[AUTO-RETRY] 当前模型: ' + currentModelText);
+                    
+                    // 找到当前模型在 fallback 列表中的位置
+                    let currentIdx = -1;
                     for (let i = 0; i < autoRetry.modelFallback.length; i++) {
                         if (currentModelText.includes(autoRetry.modelFallback[i])) {
-                            nextModel = autoRetry.modelFallback[i + 1] || autoRetry.modelFallback[0];
+                            currentIdx = i;
                             break;
                         }
                     }
+                    // 选下一个（循环）
+                    const nextIdx = (currentIdx + 1) % autoRetry.modelFallback.length;
+                    const nextModel = autoRetry.modelFallback[nextIdx];
+                    
+                    // 如果下一个就是当前的，跳过切换直接重试
+                    if (currentModelText.includes(nextModel)) {
+                        console.log('[AUTO-RETRY] 无其他可用模型，直接重试当前模型');
+                        btn.click();
+                        return;
+                    }
 
-                    // 2. 点击触发器打开对话框
+                    console.log('[AUTO-RETRY] 目标模型: ' + nextModel);
+
+                    // 3. 点击触发器打开对话框
                     trigger.click();
                     await new Promise(r => setTimeout(r, 800));
 
-                    // 3. 在对话框中寻找目标模型
-                    const dialog = document.querySelector('div[role="dialog"]');
-                    if (dialog) {
-                        const modelSpans = Array.from(dialog.querySelectorAll('span.text-xs.font-medium'));
-                        const targetSpan = modelSpans.find(s => s.textContent.includes(nextModel));
-                        if (targetSpan) {
-                            const row = targetSpan.closest('.cursor-pointer');
-                            if (row) {
-                                row.click();
-                                console.log("[AUTO-RETRY] 已切换模型至: " + nextModel);
-                            }
-                        } else {
-                            console.log("[AUTO-RETRY] 对话框中找不到模型: " + nextModel + "，取消切换");
-                            trigger.click(); // 再次点击关闭对话框
+                    // 4. 全局搜索模型列表中的目标模型（无需依赖 dialog 容器）
+                    const allModelSpans = Array.from(document.querySelectorAll('span.text-xs.font-medium'));
+                    const targetSpan = allModelSpans.find(s => s.textContent.includes(nextModel));
+                    let switched = false;
+                    if (targetSpan) {
+                        const row = targetSpan.closest('.cursor-pointer');
+                        if (row) {
+                            row.click();
+                            console.log('[AUTO-RETRY] \u2705 已切换模型至: ' + nextModel);
+                            switched = true;
                         }
                     } else {
-                        console.log("[AUTO-RETRY] 未找到模型选择对话框");
+                        console.log('[AUTO-RETRY] \u26a0\ufe0f 找不到模型: ' + nextModel + ' (共扫描 ' + allModelSpans.length + ' 个 span)');
+                    }
+                    if (!switched) {
+                        document.body.click(); // 关闭弹窗
                     }
                     
                     // 等待模型切换生效
                     await new Promise(r => setTimeout(r, 1000));
                     
-                    // 4. 点击 Retry 按钮 (DOM可能刷新，重新查找)
+                    // 5. 重新查找并点击 Retry 按钮
                     const retryBtns = Array.from(document.querySelectorAll('button')).filter(b => {
                         if (b.disabled) return false;
-                        const text = normalize(b.textContent || '');
-                        return autoRetry.retryButtonTexts.some(rt => normalize(rt) === text);
+                        const t = normalize(b.textContent || '');
+                        return autoRetry.retryButtonTexts.some(rt => normalize(rt) === t);
                     });
                     
                     const newBtn = retryBtns[retryBtns.length - 1] || btn;
+                    newBtn.setAttribute(MARKER, Date.now().toString());
                     newBtn.click();
-                    console.log("[AUTO-RETRY] 已点击重试按钮");
+                    console.log('[AUTO-RETRY] \u{1f504} 已点击重试按钮');
                     
                 } catch (e) {
-                    console.error("[AUTO-RETRY] 切换失败:", e);
-                    btn.click(); // fallback: fallback 直接点
+                    console.error('[AUTO-RETRY] 切换失败:', e);
+                    btn.click();
                 } finally {
                     window.__isRetrying = false;
                 }
@@ -257,11 +285,12 @@ function buildObserverScript(buttonTexts, autoRetryConfig) {
                     if (autoRetry?.enabled && autoRetry.retryButtonTexts?.length > 0) {
                         const isRetry = autoRetry.retryButtonTexts.some(rt => normalize(rt) === text);
                         if (isRetry) {
-                            if (!window.__isRetrying) {
+                            if (!window.__isRetrying && window.__retryCount < MAX_RETRIES) {
                                 btn.setAttribute(MARKER, Date.now().toString());
                                 doAutoRetry(btn);
                             }
-                            continue; // 不将 retry 放入普通点击候选项
+                            // 超限后不跳过，让按钮留给用户手动操作
+                            continue;
                         }
                     }
                     
@@ -636,13 +665,17 @@ class TargetManager {
             Runtime.consoleAPICalled(({ type, args }) => {
                 if (type === 'log' && args.length > 0) {
                     const msg = args[0]?.value;
-                    if (typeof msg === 'string' && msg.startsWith('[AUTO-ACCEPT-CLICKED]')) {
-                        try {
-                            const clicked = JSON.parse(msg.replace('[AUTO-ACCEPT-CLICKED]', ''));
-                            for (const text of clicked) {
-                                log(`✅ 自动点击了: [${text}]  (target: ${targetInfo.title || targetInfo.url || 'unknown'})`);
-                            }
-                        } catch (_) { /* ignore parse error */ }
+                    if (typeof msg === 'string') {
+                        if (msg.startsWith('[AUTO-ACCEPT-CLICKED]')) {
+                            try {
+                                const clicked = JSON.parse(msg.replace('[AUTO-ACCEPT-CLICKED]', ''));
+                                for (const text of clicked) {
+                                    log(`✅ 自动点击了: [${text}]  (target: ${targetInfo.title || targetInfo.url || 'unknown'})`);
+                                }
+                            } catch (_) { /* ignore parse error */ }
+                        } else if (msg.startsWith('[AUTO-RETRY]')) {
+                            log(msg);
+                        }
                     }
                 }
             });
@@ -652,8 +685,10 @@ class TargetManager {
 
             if (isManager) {
                 await this.injectRenamer(client, targetInfo.id);
-            } else {
-                // ---- 普通 target: 注入按钮自动点击 Observer ----
+            }
+
+            {
+                // ---- 所有 target: 注入按钮自动点击 Observer（含 autoRetry）----
                 const result = await Runtime.evaluate({
                     expression: this.observerScript,
                     returnByValue: true,

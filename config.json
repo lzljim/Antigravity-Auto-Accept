@@ -16,12 +16,13 @@
     "autoRetry": {
         "enabled": true,
         "modelFallback": [
-            "Claude Opus 4.6",
-            "Claude Sonnet",
-            "Gemini 3.1 Pro"
+            "Claude Opus 4.6 (Thinking)",
+            "Claude Sonnet 4.6 (Thinking)",
+            "Gemini 3.1 Pro (High)"
         ],
         "retryButtonTexts": [
             "Retry"
-        ]
+        ],
+        "maxRetries": 3
     }
 }
