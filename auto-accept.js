@@ -537,8 +537,17 @@ class TargetManager {
             }
         }
 
-        // 对新 target 建立连接
-        const newTargets = targets.filter(t => !this.connections.has(t.id));
+        // 对新 target 建立连接（跳过外部浏览器页面）
+        const newTargets = targets.filter(t => {
+            if (this.connections.has(t.id)) return false;
+            // 跳过 AI 打开的外部网页（http/https），避免持久连接干扰关闭
+            const url = t.url || '';
+            if (url.startsWith('http://') || url.startsWith('https://')) {
+                debug(`跳过外部网页: ${t.title || url}`);
+                return false;
+            }
+            return true;
+        });
         if (newTargets.length > 0) {
             debug(`发现 ${newTargets.length} 个新 target，正在建立连接...`);
             const attachPromises = newTargets.map(t => this.attachTarget(t));
