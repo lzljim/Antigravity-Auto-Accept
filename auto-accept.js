@@ -43,6 +43,7 @@ const AUTO_RECONNECT = config.autoReconnect ?? true;
 const RECONNECT_INTERVAL = config.reconnectIntervalMs ?? 3000;
 const LOG_LEVEL = config.logLevel ?? 'info'; // 'debug' | 'info' | 'silent'
 const USE_PERSISTENT_MODE = config.usePersistentMode ?? true; // 持久连接模式
+const AUTO_RETRY = config.autoRetry ?? { enabled: false }; // 自动模型重试配置
 
 // ============================================================
 //  会话名称映射（持久化）
@@ -68,23 +69,6 @@ function saveSessionName(uuid, name, original) {
     fs.writeFileSync(SESSION_NAMES_PATH, JSON.stringify(names, null, 2), 'utf-8');
     log(`📝 会话名称已保存: ${uuid.substring(0, 8)}... → "${name}"`);
     return names;
-}
-
-/**
- * 从 session-names.json 获取“原始名称 → 自定义名称”映射
- */
-function getNameReplacements() {
-    const names = loadSessionNames();
-    const replacements = {};
-    for (const [uuid, entry] of Object.entries(names)) {
-        // 兼容旧格式（纯字符串）
-        const customName = typeof entry === 'string' ? entry : entry.name;
-        const originalName = typeof entry === 'string' ? null : entry.original;
-        if (originalName && customName) {
-            replacements[originalName] = customName;
-        }
-    }
-    return replacements;
 }
 
 // ============================================================
@@ -166,8 +150,9 @@ function buildDetectionScript(buttonTexts) {
 //  生成 MutationObserver 注入脚本（常驻 target 中）
 // ============================================================
 
-function buildObserverScript(buttonTexts) {
+function buildObserverScript(buttonTexts, autoRetryConfig) {
     const textsJSON = JSON.stringify(buttonTexts.map(t => t.toLowerCase()));
+    const autoRetryJSON = JSON.stringify(autoRetryConfig);
 
     return `
         (() => {
@@ -177,6 +162,7 @@ function buildObserverScript(buttonTexts) {
             }
 
             const targetTexts = ${textsJSON};
+            const autoRetry = ${autoRetryJSON};
             const MARKER = 'data-auto-accepted';
 
             function normalize(rawText) {
@@ -186,6 +172,77 @@ function buildObserverScript(buttonTexts) {
                     .toLowerCase();
             }
 
+            // 执行模型切换并重试
+            async function doAutoRetry(btn) {
+                if (window.__isRetrying) return;
+                window.__isRetrying = true;
+                
+                try {
+                    console.log("[AUTO-RETRY] 检测到失败，开始自动切换模型...");
+                    
+                    // 1. 查找模型选择器触发按钮 (状态栏里的 span)
+                    const spans = Array.from(document.querySelectorAll('span.select-none.text-ellipsis'));
+                    const trigger = spans.find(s => s.parentElement?.className.includes('items-center'));
+                    
+                    if (!trigger || !autoRetry.modelFallback || autoRetry.modelFallback.length === 0) {
+                        console.log("[AUTO-RETRY] 找不到模型选择器或 fallback 配置为空，直接重试");
+                        btn.click();
+                        return;
+                    }
+
+                    const currentModelText = trigger.textContent;
+                    let nextModel = autoRetry.modelFallback[0];
+                    for (let i = 0; i < autoRetry.modelFallback.length; i++) {
+                        if (currentModelText.includes(autoRetry.modelFallback[i])) {
+                            nextModel = autoRetry.modelFallback[i + 1] || autoRetry.modelFallback[0];
+                            break;
+                        }
+                    }
+
+                    // 2. 点击触发器打开对话框
+                    trigger.click();
+                    await new Promise(r => setTimeout(r, 800));
+
+                    // 3. 在对话框中寻找目标模型
+                    const dialog = document.querySelector('div[role="dialog"]');
+                    if (dialog) {
+                        const modelSpans = Array.from(dialog.querySelectorAll('span.text-xs.font-medium'));
+                        const targetSpan = modelSpans.find(s => s.textContent.includes(nextModel));
+                        if (targetSpan) {
+                            const row = targetSpan.closest('.cursor-pointer');
+                            if (row) {
+                                row.click();
+                                console.log("[AUTO-RETRY] 已切换模型至: " + nextModel);
+                            }
+                        } else {
+                            console.log("[AUTO-RETRY] 对话框中找不到模型: " + nextModel + "，取消切换");
+                            trigger.click(); // 再次点击关闭对话框
+                        }
+                    } else {
+                        console.log("[AUTO-RETRY] 未找到模型选择对话框");
+                    }
+                    
+                    // 等待模型切换生效
+                    await new Promise(r => setTimeout(r, 1000));
+                    
+                    // 4. 点击 Retry 按钮 (DOM可能刷新，重新查找)
+                    const retryBtns = Array.from(document.querySelectorAll('button')).filter(b => {
+                        if (b.disabled) return false;
+                        const text = normalize(b.textContent || '');
+                        return autoRetry.retryButtonTexts.some(rt => normalize(rt) === text);
+                    });
+                    
+                    const newBtn = retryBtns[retryBtns.length - 1] || btn;
+                    newBtn.click();
+                    console.log("[AUTO-RETRY] 已点击重试按钮");
+                    
+                } catch (e) {
+                    console.error("[AUTO-RETRY] 切换失败:", e);
+                    btn.click(); // fallback: fallback 直接点
+                } finally {
+                    window.__isRetrying = false;
+                }
+            }
 
             function scanAndClick(root) {
                 // 收集所有可点击的按钮
@@ -195,6 +252,19 @@ function buildObserverScript(buttonTexts) {
                     if (btn.disabled) continue;
                     if (btn.hasAttribute(MARKER)) continue;
                     const text = normalize((btn.textContent || '').trim());
+                    
+                    // 特殊处理 Retry 按钮
+                    if (autoRetry?.enabled && autoRetry.retryButtonTexts?.length > 0) {
+                        const isRetry = autoRetry.retryButtonTexts.some(rt => normalize(rt) === text);
+                        if (isRetry) {
+                            if (!window.__isRetrying) {
+                                btn.setAttribute(MARKER, Date.now().toString());
+                                doAutoRetry(btn);
+                            }
+                            continue; // 不将 retry 放入普通点击候选项
+                        }
+                    }
+                    
                     candidates.push({ btn, text });
                 }
 
@@ -285,12 +355,15 @@ function buildRenamerScript(nameMap) {
                     const uuid = testId.replace('convo-pill-', '');
                     const entry = nameMap[uuid];
                     const customName = typeof entry === 'string' ? entry : entry?.name;
-                    if (customName && span.textContent !== customName) {
+                    const displayName = customName ? '\u270f\ufe0f ' + customName : null;
+                    if (displayName && span.textContent !== displayName) {
                         // 保存原始名称
                         if (!span.hasAttribute('data-original-name')) {
                             span.setAttribute('data-original-name', span.textContent);
                         }
-                        span.textContent = customName;
+                        span.textContent = '\u270f\ufe0f ' + customName;
+                        // tooltip 显示原始名称
+                        span.title = '原始: ' + span.getAttribute('data-original-name');
                     }
                 }
             }
@@ -309,11 +382,13 @@ function buildRenamerScript(nameMap) {
                     const uuid = testId.replace('convo-pill-', '');
                     const currentText = span.textContent;
                     const originalName = span.getAttribute('data-original-name') || currentText;
+                    // 去掉 emoji 前缀给用户编辑纯名称
+                    const editValue = currentText.replace(/^\u270f\ufe0f\s*/, '');
 
                     // 创建 input 替换 span
                     const input = document.createElement('input');
                     input.type = 'text';
-                    input.value = currentText;
+                    input.value = editValue;
                     input.className = span.className;
                     input.style.cssText = 'background:var(--vscode-input-background,#3c3c3c);color:var(--vscode-input-foreground,#ccc);border:1px solid var(--vscode-focusBorder,#007fd4);border-radius:3px;padding:1px 4px;outline:none;width:100%;font-size:inherit;';
 
@@ -329,8 +404,9 @@ function buildRenamerScript(nameMap) {
                         committed = true;
                         const newName = input.value.trim();
                         if (newName && newName !== originalName) {
-                            span.textContent = newName;
+                            span.textContent = '\u270f\ufe0f ' + newName;
                             span.setAttribute('data-original-name', originalName);
+                            span.title = '原始: ' + originalName;
                             nameMap[uuid] = { name: newName, original: originalName };
                             // 通过 binding 回调 Node.js 侧保存（带上原始名称）
                             try { window.__saveSessionName(JSON.stringify({ uuid, name: newName, original: originalName })); } catch(_) {}
@@ -338,6 +414,7 @@ function buildRenamerScript(nameMap) {
                             // 空名称 = 恢复原始名称
                             span.textContent = originalName;
                             span.removeAttribute('data-original-name');
+                            span.title = '';
                             delete nameMap[uuid];
                             try { window.__saveSessionName(JSON.stringify({ uuid, name: '' })); } catch(_) {}
                         } else {
@@ -370,8 +447,10 @@ function buildRenamerScript(nameMap) {
                 }
             }
 
+            let isUpdate = false;
             // 重新注入时：清除旧事件绑定，强制重新绑定（确保使用最新代码）
             if (window.__sessionRenamer) {
+                isUpdate = true;
                 window.__sessionRenamer.observer?.disconnect();
                 // 清除旧的事件绑定标记，bindAll 会重新绑定
                 document.querySelectorAll('[' + RENAMER_MARKER + ']').forEach(el => {
@@ -415,81 +494,7 @@ function buildRenamerScript(nameMap) {
 
             window.__sessionRenamer = { observer, nameMap };
 
-            return { status: 'injected' };
-        })()
-    `;
-}
-
-// ============================================================
-//  生成全局名称替换脚本（注入到所有 target）
-// ============================================================
-
-function buildNameReplacerScript(replacements) {
-    if (Object.keys(replacements).length === 0) return null;
-
-    const replacementsJSON = JSON.stringify(replacements);
-
-    return `
-        (() => {
-            const replacements = ${replacementsJSON};
-            const REPLACER_MARKER = 'data-name-replaced';
-            const originals = Object.keys(replacements);
-            if (originals.length === 0) return { status: 'empty' };
-
-            function replaceNames() {
-                // 扫描所有可能包含会话名称的文本节点
-                const walker = document.createTreeWalker(
-                    document.body || document.documentElement,
-                    NodeFilter.SHOW_TEXT,
-                    null
-                );
-
-                const replacedNodes = [];
-                let node;
-                while (node = walker.nextNode()) {
-                    // 跳过 script/style/textarea
-                    const parent = node.parentElement;
-                    if (!parent) continue;
-                    const tag = parent.tagName;
-                    if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'TEXTAREA' || tag === 'INPUT') continue;
-
-                    const text = node.nodeValue;
-                    if (!text || text.trim().length === 0) continue;
-
-                    for (const original of originals) {
-                        if (text.includes(original)) {
-                            node.nodeValue = text.replace(original, replacements[original]);
-                            // 标记父元素防止重复处理
-                            if (parent && !parent.hasAttribute(REPLACER_MARKER)) {
-                                parent.setAttribute(REPLACER_MARKER, '1');
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 防止重复注入
-            if (window.__nameReplacer) {
-                // 更新映射
-                Object.assign(window.__nameReplacer.replacements, replacements);
-                replaceNames();
-                return { status: 'updated' };
-            }
-
-            replaceNames();
-
-            // MutationObserver 监听 DOM 变化
-            const observer = new MutationObserver((mutations) => {
-                let needReplace = false;
-                for (const m of mutations) {
-                    if (m.addedNodes.length > 0) { needReplace = true; break; }
-                }
-                if (needReplace) replaceNames();
-            });
-            observer.observe(document.documentElement, { childList: true, subtree: true });
-
-            window.__nameReplacer = { observer, replacements };
-            return { status: 'injected' };
+            return { status: isUpdate ? 'updated' : 'injected' };
         })()
     `;
 }
@@ -498,12 +503,15 @@ function buildNameReplacerScript(replacements) {
 //  持久连接管理器（TargetManager）
 // ============================================================
 
+let activeTargetManager = null;
+
 class TargetManager {
     constructor() {
         /** @type {Map<string, { client: any, info: any, ready: boolean }>} */
         this.connections = new Map();
         this.detectionScript = buildDetectionScript(BUTTON_TEXTS);
-        this.observerScript = buildObserverScript(BUTTON_TEXTS);
+        this.observerScript = buildObserverScript(BUTTON_TEXTS, AUTO_RETRY);
+        activeTargetManager = this;
     }
 
     /**
@@ -537,11 +545,67 @@ class TargetManager {
             await Promise.allSettled(attachPromises);
         }
 
+        // 补检：已连接但未注入 renamer 的 Manager target
+        for (const t of targets) {
+            if (t.title === 'Manager') {
+                const conn = this.connections.get(t.id);
+                if (conn && conn.ready && !conn.renamerInjected) {
+                    await this.injectRenamer(conn.client, t.id);
+                }
+            }
+        }
+
         return {
             total: targets.length,
             active: this.connections.size,
             newlyAdded: newTargets.length
         };
+    }
+
+    /**
+     * 向 Manager target 注入会话重命名脚本
+     */
+    async injectRenamer(client, targetId) {
+        try {
+            const { Runtime } = client;
+
+            try {
+                await Runtime.addBinding({ name: '__saveSessionName' });
+            } catch (_) { /* binding 可能已存在 */ }
+
+            Runtime.bindingCalled(({ name, payload }) => {
+                if (name === '__saveSessionName') {
+                    try {
+                        const { uuid, name: newName, original } = JSON.parse(payload);
+                        saveSessionName(uuid, newName, original);
+                    } catch (err) {
+                        error(`保存会话名称失败: ${err.message}`);
+                    }
+                }
+            });
+
+            const sessionNames = loadSessionNames();
+            const renamerScript = buildRenamerScript(sessionNames);
+            const renamerResult = await Runtime.evaluate({
+                expression: renamerScript,
+                returnByValue: true,
+                awaitPromise: false
+            });
+
+            const renamerStatus = renamerResult?.result?.value?.status;
+            if (renamerStatus === 'injected') {
+                log(`🏷️  会话重命名已注入 Manager (双击会话标题可编辑)`);
+            } else if (renamerStatus === 'updated') {
+                debug(`会话重命名映射已更新`);
+            }
+
+            // 标记已注入
+            const conn = this.connections.get(targetId);
+            if (conn) conn.renamerInjected = true;
+
+        } catch (err) {
+            debug(`注入 renamer 失败: ${err.message}`);
+        }
     }
 
     /**
@@ -578,36 +642,7 @@ class TargetManager {
             const isManager = targetInfo.title === 'Manager';
 
             if (isManager) {
-                // ---- Manager target: 注入会话重命名脚本 ----
-                try {
-                    await Runtime.addBinding({ name: '__saveSessionName' });
-                } catch (_) { /* binding 可能已存在 */ }
-
-                Runtime.bindingCalled(({ name, payload }) => {
-                    if (name === '__saveSessionName') {
-                        try {
-                            const { uuid, name: newName, original } = JSON.parse(payload);
-                            saveSessionName(uuid, newName, original);
-                        } catch (err) {
-                            error(`保存会话名称失败: ${err.message}`);
-                        }
-                    }
-                });
-
-                const sessionNames = loadSessionNames();
-                const renamerScript = buildRenamerScript(sessionNames);
-                const renamerResult = await Runtime.evaluate({
-                    expression: renamerScript,
-                    returnByValue: true,
-                    awaitPromise: false
-                });
-
-                const renamerStatus = renamerResult?.result?.value?.status;
-                if (renamerStatus === 'injected') {
-                    log(`🏷️  会话重命名已注入 Manager (双击会话标题可编辑)`);
-                } else if (renamerStatus === 'updated') {
-                    debug(`会话重命名映射已更新`);
-                }
+                await this.injectRenamer(client, targetInfo.id);
             } else {
                 // ---- 普通 target: 注入按钮自动点击 Observer ----
                 const result = await Runtime.evaluate({
@@ -628,20 +663,6 @@ class TargetManager {
                     debug(`Observer 已存在，跳过: ${targetInfo.title || targetInfo.id}`);
                 }
             }
-
-            // 所有 target 都注入全局名称替换脚本
-            const replacements = getNameReplacements();
-            const replacerScript = buildNameReplacerScript(replacements);
-            if (replacerScript) {
-                try {
-                    await Runtime.evaluate({
-                        expression: replacerScript,
-                        returnByValue: true,
-                        awaitPromise: false
-                    });
-                } catch (_) { /* 忽略替换失败 */ }
-            }
-
             // 监听连接断开事件
             client.on('disconnect', () => {
                 debug(`Target 连接断开: ${targetInfo.id}`);
@@ -651,7 +672,8 @@ class TargetManager {
             this.connections.set(targetInfo.id, {
                 client,
                 info: targetInfo,
-                ready: true
+                ready: true,
+                renamerInjected: isManager
             });
 
         } catch (err) {

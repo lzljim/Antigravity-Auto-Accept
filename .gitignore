@@ -28,8 +28,7 @@ Desktop.ini
 dist/
 build/
 
-# User local config (use *.example as template)
-config.json
+# User local config
 session-names.json
 
 # Temp explore scripts

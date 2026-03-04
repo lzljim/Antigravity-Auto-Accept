@@ -1,0 +1,27 @@
+{
+    "port": 9222,
+    "pollIntervalMs": 500,
+    "buttonTexts": [
+        "Run",
+        "Allow This Conversation",
+        "Always Allow",
+        "Allow Once",
+        "Accept all",
+        "Accept"
+    ],
+    "usePersistentMode": true,
+    "autoReconnect": true,
+    "reconnectIntervalMs": 3000,
+    "logLevel": "info",
+    "autoRetry": {
+        "enabled": true,
+        "modelFallback": [
+            "Claude Opus 4.6",
+            "Claude Sonnet",
+            "Gemini 3.1 Pro"
+        ],
+        "retryButtonTexts": [
+            "Retry"
+        ]
+    }
+}
