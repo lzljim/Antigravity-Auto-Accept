@@ -72,6 +72,32 @@ function saveSessionName(uuid, name, original) {
 }
 
 // ============================================================
+//  Workspace 名称映射（持久化）
+// ============================================================
+
+const WORKSPACE_NAMES_PATH = path.join(__dirname, 'workspace-names.json');
+
+function loadWorkspaceNames() {
+    try {
+        return JSON.parse(fs.readFileSync(WORKSPACE_NAMES_PATH, 'utf-8'));
+    } catch (_) {
+        return {};
+    }
+}
+
+function saveWorkspaceName(key, name, original) {
+    const names = loadWorkspaceNames();
+    if (name && name.trim()) {
+        names[key] = { name: name.trim(), original: original || names[key]?.original || '' };
+    } else {
+        delete names[key];
+    }
+    fs.writeFileSync(WORKSPACE_NAMES_PATH, JSON.stringify(names, null, 2), 'utf-8');
+    log(`📝 Workspace 名称已保存: "${key}" → "${name}"`);
+    return names;
+}
+
+// ============================================================
 //  日志工具
 // ============================================================
 
@@ -159,9 +185,10 @@ function buildObserverScript(buttonTexts, autoRetryConfig) {
             // 重置重试计数器（脚本重新注入时归零）
             window.__retryCount = 0;
 
-            // 防止重复注入
+            // 如果已有旧 Observer，先断开再重新注入（确保代码变更后生效）
             if (window.__autoAcceptObserver) {
-                return { status: 'already_injected' };
+                window.__autoAcceptObserver.disconnect();
+                window.__autoAcceptObserver = null;
             }
 
             const targetTexts = ${textsJSON};
@@ -175,98 +202,28 @@ function buildObserverScript(buttonTexts, autoRetryConfig) {
                     .toLowerCase();
             }
 
-            // 执行模型切换并重试
+            // 直接重试（不切换模型）
             const MAX_RETRIES = autoRetry.maxRetries || 3;
 
             async function doAutoRetry(btn) {
                 if (window.__isRetrying) return;
-                
+
                 // 检查重试上限
                 window.__retryCount++;
                 if (window.__retryCount > MAX_RETRIES) {
                     console.log('[AUTO-RETRY] \u2757 已达最大重试次数(' + MAX_RETRIES + ')，停止自动重试');
                     return;
                 }
-                
+
                 window.__isRetrying = true;
-                
+
                 try {
-                    console.log('[AUTO-RETRY] \u{1f504} 第 ' + window.__retryCount + '/' + MAX_RETRIES + ' 次重试，正在切换模型...');
-                    
-                    // 1. 查找模型选择器 (输入栏底部的模型名 span)
-                    const trigger = document.querySelector('span.min-w-0.select-none.overflow-hidden.text-ellipsis');
-                    
-                    if (!trigger || !autoRetry.modelFallback || autoRetry.modelFallback.length === 0) {
-                        console.log('[AUTO-RETRY] 找不到模型选择器或 fallback 为空，直接重试');
-                        btn.click();
-                        return;
-                    }
-
-                    // 2. 按 fallback 顺序选择下一个模型
-                    const currentModelText = trigger.textContent || '';
-                    console.log('[AUTO-RETRY] 当前模型: ' + currentModelText);
-                    
-                    // 找到当前模型在 fallback 列表中的位置
-                    let currentIdx = -1;
-                    for (let i = 0; i < autoRetry.modelFallback.length; i++) {
-                        if (currentModelText.includes(autoRetry.modelFallback[i])) {
-                            currentIdx = i;
-                            break;
-                        }
-                    }
-                    // 选下一个（循环）
-                    const nextIdx = (currentIdx + 1) % autoRetry.modelFallback.length;
-                    const nextModel = autoRetry.modelFallback[nextIdx];
-                    
-                    // 如果下一个就是当前的，跳过切换直接重试
-                    if (currentModelText.includes(nextModel)) {
-                        console.log('[AUTO-RETRY] 无其他可用模型，直接重试当前模型');
-                        btn.click();
-                        return;
-                    }
-
-                    console.log('[AUTO-RETRY] 目标模型: ' + nextModel);
-
-                    // 3. 点击触发器打开对话框
-                    trigger.click();
-                    await new Promise(r => setTimeout(r, 800));
-
-                    // 4. 全局搜索模型列表中的目标模型（无需依赖 dialog 容器）
-                    const allModelSpans = Array.from(document.querySelectorAll('span.text-xs.font-medium'));
-                    const targetSpan = allModelSpans.find(s => s.textContent.includes(nextModel));
-                    let switched = false;
-                    if (targetSpan) {
-                        const row = targetSpan.closest('.cursor-pointer');
-                        if (row) {
-                            row.click();
-                            console.log('[AUTO-RETRY] \u2705 已切换模型至: ' + nextModel);
-                            switched = true;
-                        }
-                    } else {
-                        console.log('[AUTO-RETRY] \u26a0\ufe0f 找不到模型: ' + nextModel + ' (共扫描 ' + allModelSpans.length + ' 个 span)');
-                    }
-                    if (!switched) {
-                        document.body.click(); // 关闭弹窗
-                    }
-                    
-                    // 等待模型切换生效
-                    await new Promise(r => setTimeout(r, 1000));
-                    
-                    // 5. 重新查找并点击 Retry 按钮
-                    const retryBtns = Array.from(document.querySelectorAll('button')).filter(b => {
-                        if (b.disabled) return false;
-                        const t = normalize(b.textContent || '');
-                        return autoRetry.retryButtonTexts.some(rt => normalize(rt) === t);
-                    });
-                    
-                    const newBtn = retryBtns[retryBtns.length - 1] || btn;
-                    newBtn.setAttribute(MARKER, Date.now().toString());
-                    newBtn.click();
-                    console.log('[AUTO-RETRY] \u{1f504} 已点击重试按钮');
-                    
-                } catch (e) {
-                    console.error('[AUTO-RETRY] 切换失败:', e);
+                    console.log('[AUTO-RETRY] \u{1f504} 第 ' + window.__retryCount + '/' + MAX_RETRIES + ' 次重试...');
+                    btn.setAttribute(MARKER, Date.now().toString());
                     btn.click();
+                    console.log('[AUTO-RETRY] \u2705 已点击重试按钮');
+                } catch (e) {
+                    console.error('[AUTO-RETRY] 重试失败:', e);
                 } finally {
                     window.__isRetrying = false;
                 }
@@ -529,6 +486,165 @@ function buildRenamerScript(nameMap) {
 }
 
 // ============================================================
+//  生成 Workspace 重命名脚本（注入到 Manager target）
+// ============================================================
+
+function buildWorkspaceRenamerScript(nameMap) {
+    const nameMapJSON = JSON.stringify(nameMap);
+
+    return `
+        (() => {
+            const nameMap = ${nameMapJSON};
+            const RENAMER_MARKER = 'data-ws-renamer-bound';
+
+            // 定位 Workspaces 区域
+            function findWorkspaceSection() {
+                const allDivs = document.querySelectorAll('div');
+                for (const d of allDivs) {
+                    if (d.textContent.trim() === 'Workspaces' && d.classList.contains('text-xs')) {
+                        return d.closest('.flex.flex-col.gap-3');
+                    }
+                }
+                return null;
+            }
+
+            // 找到 workspace 名称 span 列表
+            function findWorkspaceSpans() {
+                const section = findWorkspaceSection();
+                if (!section) return [];
+                const spans = section.querySelectorAll('span.text-sm.font-medium.truncate');
+                return Array.from(spans).filter(s => {
+                    const text = s.textContent.trim();
+                    return text && text !== 'add';
+                });
+            }
+
+            // 应用名称映射：将 span 的 textContent 替换为自定义名称
+            function applyNames() {
+                const spans = findWorkspaceSpans();
+                for (const span of spans) {
+                    // 用原始名称作 key（存于 data-original-name 或当前 textContent）
+                    const originalName = span.getAttribute('data-original-name') || span.textContent.trim().replace(/^\u270f\ufe0f\s*/, '');
+                    const entry = nameMap[originalName];
+                    const customName = typeof entry === 'string' ? entry : entry?.name;
+                    const displayName = customName ? '\u270f\ufe0f ' + customName : null;
+                    if (displayName && span.textContent !== displayName) {
+                        if (!span.hasAttribute('data-original-name')) {
+                            span.setAttribute('data-original-name', span.textContent.trim());
+                        }
+                        span.textContent = '\u270f\ufe0f ' + customName;
+                        span.title = '原始: ' + span.getAttribute('data-original-name');
+                    }
+                }
+            }
+
+            // 为 workspace span 绑定双击编辑事件
+            function bindDblClick(span) {
+                if (span.hasAttribute(RENAMER_MARKER)) return;
+                span.setAttribute(RENAMER_MARKER, '1');
+
+                span.addEventListener('dblclick', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+
+                    const currentText = span.textContent.trim();
+                    const originalName = span.getAttribute('data-original-name') || currentText;
+                    const editValue = currentText.replace(/^\u270f\ufe0f\s*/, '');
+
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.value = editValue;
+                    input.className = span.className;
+                    input.style.cssText = 'background:var(--vscode-input-background,#3c3c3c);color:var(--vscode-input-foreground,#ccc);border:1px solid var(--vscode-focusBorder,#007fd4);border-radius:3px;padding:1px 4px;outline:none;width:100%;font-size:inherit;';
+
+                    const parent = span.parentElement;
+                    parent.replaceChild(input, span);
+                    input.focus();
+                    input.select();
+
+                    let committed = false;
+
+                    function commit() {
+                        if (committed) return;
+                        committed = true;
+                        const newName = input.value.trim();
+                        if (newName && newName !== originalName) {
+                            span.textContent = '\u270f\ufe0f ' + newName;
+                            span.setAttribute('data-original-name', originalName);
+                            span.title = '原始: ' + originalName;
+                            nameMap[originalName] = { name: newName, original: originalName };
+                            try { window.__saveWorkspaceName(JSON.stringify({ key: originalName, name: newName, original: originalName })); } catch(_) {}
+                        } else if (!newName) {
+                            span.textContent = originalName;
+                            span.removeAttribute('data-original-name');
+                            span.title = '';
+                            delete nameMap[originalName];
+                            try { window.__saveWorkspaceName(JSON.stringify({ key: originalName, name: '' })); } catch(_) {}
+                        } else {
+                            span.textContent = currentText;
+                        }
+                        parent.replaceChild(span, input);
+                    }
+
+                    function cancel() {
+                        if (committed) return;
+                        committed = true;
+                        span.textContent = currentText;
+                        parent.replaceChild(span, input);
+                    }
+
+                    input.addEventListener('keydown', (ke) => {
+                        if (ke.key === 'Enter') { ke.preventDefault(); commit(); }
+                        if (ke.key === 'Escape') { ke.preventDefault(); cancel(); }
+                        ke.stopPropagation();
+                    });
+                    input.addEventListener('blur', () => commit());
+                }, true);
+            }
+
+            // 绑定所有现有 workspace 标题
+            function bindAll() {
+                const spans = findWorkspaceSpans();
+                for (const span of spans) {
+                    bindDblClick(span);
+                }
+            }
+
+            let isUpdate = false;
+            if (window.__workspaceRenamer) {
+                isUpdate = true;
+                window.__workspaceRenamer.observer?.disconnect();
+                const section = findWorkspaceSection();
+                if (section) {
+                    section.querySelectorAll('[' + RENAMER_MARKER + ']').forEach(el => {
+                        el.removeAttribute(RENAMER_MARKER);
+                        const clone = el.cloneNode(true);
+                        el.parentNode?.replaceChild(clone, el);
+                    });
+                }
+            }
+
+            applyNames();
+            bindAll();
+
+            // MutationObserver: workspace 列表可能因切换/虚拟滚动重新渲染
+            const section = findWorkspaceSection() || document.documentElement;
+            const observer = new MutationObserver(() => {
+                applyNames();
+                bindAll();
+            });
+
+            observer.observe(section, { childList: true, subtree: true });
+
+            window.__workspaceRenamer = { observer, nameMap };
+
+            return { status: isUpdate ? 'updated' : 'injected' };
+        })()
+    `;
+}
+
+// ============================================================
 //  持久连接管理器（TargetManager）
 // ============================================================
 
@@ -607,8 +723,14 @@ class TargetManager {
         try {
             const { Runtime } = client;
 
+            // ---- 会话重命名 binding ----
             try {
                 await Runtime.addBinding({ name: '__saveSessionName' });
+            } catch (_) { /* binding 可能已存在 */ }
+
+            // ---- Workspace 重命名 binding ----
+            try {
+                await Runtime.addBinding({ name: '__saveWorkspaceName' });
             } catch (_) { /* binding 可能已存在 */ }
 
             Runtime.bindingCalled(({ name, payload }) => {
@@ -619,9 +741,17 @@ class TargetManager {
                     } catch (err) {
                         error(`保存会话名称失败: ${err.message}`);
                     }
+                } else if (name === '__saveWorkspaceName') {
+                    try {
+                        const { key, name: newName, original } = JSON.parse(payload);
+                        saveWorkspaceName(key, newName, original);
+                    } catch (err) {
+                        error(`保存 Workspace 名称失败: ${err.message}`);
+                    }
                 }
             });
 
+            // ---- 注入会话重命名脚本 ----
             const sessionNames = loadSessionNames();
             const renamerScript = buildRenamerScript(sessionNames);
             const renamerResult = await Runtime.evaluate({
@@ -635,6 +765,22 @@ class TargetManager {
                 log(`🏷️  会话重命名已注入 Manager (双击会话标题可编辑)`);
             } else if (renamerStatus === 'updated') {
                 debug(`会话重命名映射已更新`);
+            }
+
+            // ---- 注入 Workspace 重命名脚本 ----
+            const workspaceNames = loadWorkspaceNames();
+            const wsRenamerScript = buildWorkspaceRenamerScript(workspaceNames);
+            const wsResult = await Runtime.evaluate({
+                expression: wsRenamerScript,
+                returnByValue: true,
+                awaitPromise: false
+            });
+
+            const wsStatus = wsResult?.result?.value?.status;
+            if (wsStatus === 'injected') {
+                log(`📂 Workspace 重命名已注入 Manager (双击 Workspace 名称可编辑)`);
+            } else if (wsStatus === 'updated') {
+                debug(`Workspace 重命名映射已更新`);
             }
 
             // 标记已注入

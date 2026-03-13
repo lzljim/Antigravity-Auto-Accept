@@ -30,6 +30,7 @@ build/
 
 # User local config
 session-names.json
+workspace-names.json
 
 # Temp explore scripts
 _explore.js
