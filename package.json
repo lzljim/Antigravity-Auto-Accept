@@ -4,7 +4,8 @@
   "description": "通过 CDP 协议自动确认 Antigravity IDE 中的 Agent 操作按钮",
   "main": "auto-accept.js",
   "scripts": {
-    "start": "node auto-accept.js"
+    "start": "node auto-accept.js",
+    "dev": "node watcher.js"
   },
   "dependencies": {
     "chrome-remote-interface": "^0.33.2"
