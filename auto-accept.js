@@ -508,32 +508,60 @@ function buildWorkspaceRenamerScript(nameMap) {
                 return null;
             }
 
-            // 找到 workspace 名称 span 列表
-            function findWorkspaceSpans() {
+            // 找到 workspace 名称 span 列表，并为每个 span 计算唯一 key
+            // key 规则：对同名 workspace 追加 #index（如 "bi4.0.code-workspace#1"），唯一名称不加后缀
+            function findWorkspaceSpansWithKeys() {
                 const section = findWorkspaceSection();
                 if (!section) return [];
                 const spans = section.querySelectorAll('span.text-sm.font-medium.truncate');
-                return Array.from(spans).filter(s => {
+                const filtered = Array.from(spans).filter(s => {
                     const text = s.textContent.trim();
                     return text && text !== 'add';
                 });
+
+                // 统计原始名称出现次数
+                const nameCount = {};
+                const nameIndex = {};
+                for (const span of filtered) {
+                    const rawName = span.getAttribute('data-original-name')
+                        || span.textContent.trim().replace(/^\u270f\ufe0f\s*/, '');
+                    nameCount[rawName] = (nameCount[rawName] || 0) + 1;
+                }
+
+                // 为每个 span 生成唯一 key
+                const result = [];
+                for (const span of filtered) {
+                    const rawName = span.getAttribute('data-original-name')
+                        || span.textContent.trim().replace(/^\u270f\ufe0f\s*/, '');
+                    let key;
+                    if (nameCount[rawName] > 1) {
+                        // 同名多个：用 name#index 区分
+                        nameIndex[rawName] = (nameIndex[rawName] || 0);
+                        key = rawName + '#' + nameIndex[rawName];
+                        nameIndex[rawName]++;
+                    } else {
+                        key = rawName;
+                    }
+                    // 将 key 存到 DOM 上，以便双击编辑时读取
+                    span.setAttribute('data-ws-key', key);
+                    result.push({ span, key, rawName });
+                }
+                return result;
             }
 
-            // 应用名称映射：将 span 的 textContent 替换为自定义名称
+            // 应用名称映射
             function applyNames() {
-                const spans = findWorkspaceSpans();
-                for (const span of spans) {
-                    // 用原始名称作 key（存于 data-original-name 或当前 textContent）
-                    const originalName = span.getAttribute('data-original-name') || span.textContent.trim().replace(/^\u270f\ufe0f\s*/, '');
-                    const entry = nameMap[originalName];
+                const items = findWorkspaceSpansWithKeys();
+                for (const { span, key, rawName } of items) {
+                    const entry = nameMap[key];
                     const customName = typeof entry === 'string' ? entry : entry?.name;
                     const displayName = customName ? '\u270f\ufe0f ' + customName : null;
                     if (displayName && span.textContent !== displayName) {
                         if (!span.hasAttribute('data-original-name')) {
-                            span.setAttribute('data-original-name', span.textContent.trim());
+                            span.setAttribute('data-original-name', rawName);
                         }
                         span.textContent = '\u270f\ufe0f ' + customName;
-                        span.title = '原始: ' + span.getAttribute('data-original-name');
+                        span.title = '原始: ' + rawName;
                     }
                 }
             }
@@ -548,6 +576,7 @@ function buildWorkspaceRenamerScript(nameMap) {
                     e.stopPropagation();
                     e.stopImmediatePropagation();
 
+                    const wsKey = span.getAttribute('data-ws-key');
                     const currentText = span.textContent.trim();
                     const originalName = span.getAttribute('data-original-name') || currentText;
                     const editValue = currentText.replace(/^\u270f\ufe0f\s*/, '');
@@ -573,14 +602,14 @@ function buildWorkspaceRenamerScript(nameMap) {
                             span.textContent = '\u270f\ufe0f ' + newName;
                             span.setAttribute('data-original-name', originalName);
                             span.title = '原始: ' + originalName;
-                            nameMap[originalName] = { name: newName, original: originalName };
-                            try { window.__saveWorkspaceName(JSON.stringify({ key: originalName, name: newName, original: originalName })); } catch(_) {}
+                            nameMap[wsKey] = { name: newName, original: originalName };
+                            try { window.__saveWorkspaceName(JSON.stringify({ key: wsKey, name: newName, original: originalName })); } catch(_) {}
                         } else if (!newName) {
                             span.textContent = originalName;
                             span.removeAttribute('data-original-name');
                             span.title = '';
-                            delete nameMap[originalName];
-                            try { window.__saveWorkspaceName(JSON.stringify({ key: originalName, name: '' })); } catch(_) {}
+                            delete nameMap[wsKey];
+                            try { window.__saveWorkspaceName(JSON.stringify({ key: wsKey, name: '' })); } catch(_) {}
                         } else {
                             span.textContent = currentText;
                         }
@@ -605,8 +634,8 @@ function buildWorkspaceRenamerScript(nameMap) {
 
             // 绑定所有现有 workspace 标题
             function bindAll() {
-                const spans = findWorkspaceSpans();
-                for (const span of spans) {
+                const items = findWorkspaceSpansWithKeys();
+                for (const { span } of items) {
                     bindDblClick(span);
                 }
             }
