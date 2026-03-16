@@ -43,7 +43,12 @@ const AUTO_RECONNECT = config.autoReconnect ?? true;
 const RECONNECT_INTERVAL = config.reconnectIntervalMs ?? 3000;
 const LOG_LEVEL = config.logLevel ?? 'info'; // 'debug' | 'info' | 'silent'
 const USE_PERSISTENT_MODE = config.usePersistentMode ?? true; // 持久连接模式
-const AUTO_RETRY = config.autoRetry ?? { enabled: false }; // 自动模型重试配置
+const AUTO_RETRY = config.autoRetry ?? { enabled: false }; // 自动重试配置
+const RETRY_BUTTON_TEXTS = AUTO_RETRY.retryButtonTexts ?? ['Retry'];
+const MODEL_FALLBACK = AUTO_RETRY.modelFallback ?? [];
+const MAX_RETRIES = AUTO_RETRY.maxRetries ?? 3;
+const CONTINUE_MESSAGE = AUTO_RETRY.continueMessage ?? '继续';
+const RETURN_MODEL = AUTO_RETRY.returnModel ?? null; // 切回的目标模型
 
 // ============================================================
 //  会话名称映射（持久化）
@@ -69,6 +74,22 @@ function saveSessionName(uuid, name, original) {
     fs.writeFileSync(SESSION_NAMES_PATH, JSON.stringify(names, null, 2), 'utf-8');
     log(`📝 会话名称已保存: ${uuid.substring(0, 8)}... → "${name}"`);
     return names;
+}
+
+/**
+ * 从 session-names.json 获取"原始名称 → 自定义名称"映射
+ */
+function getNameReplacements() {
+    const names = loadSessionNames();
+    const replacements = {};
+    for (const [uuid, entry] of Object.entries(names)) {
+        const customName = typeof entry === 'string' ? entry : entry.name;
+        const originalName = typeof entry === 'string' ? null : entry.original;
+        if (originalName && customName) {
+            replacements[originalName] = customName;
+        }
+    }
+    return replacements;
 }
 
 // ============================================================
@@ -125,13 +146,15 @@ function error(msg) {
 //  生成按钮检测脚本（注入到 target 中执行）
 // ============================================================
 
-function buildDetectionScript(buttonTexts) {
+function buildDetectionScript(buttonTexts, retryButtonTexts) {
     const textsJSON = JSON.stringify(buttonTexts.map(t => t.toLowerCase()));
+    const retryTextsJSON = JSON.stringify((retryButtonTexts || []).map(t => t.toLowerCase()));
 
     // buttonTexts 的顺序即优先级（靠前 = 优先级高）
     return `
         (() => {
             const targetTexts = ${textsJSON};
+            const retryTexts = ${retryTextsJSON};
             const MARKER = 'data-auto-accepted';
 
             function normalize(rawText) {
@@ -144,10 +167,14 @@ function buildDetectionScript(buttonTexts) {
             // 收集所有可点击的按钮及其归一化文本
             const allButtons = document.querySelectorAll('button, [role="button"]');
             const candidates = [];
+            const now = Date.now();
             for (const btn of allButtons) {
                 if (btn.disabled) continue;
-                if (btn.hasAttribute(MARKER)) continue;
+                const markerTs = btn.getAttribute(MARKER);
+                if (markerTs && (now - parseInt(markerTs, 10)) < 5000) continue;
                 const text = normalize((btn.textContent || '').trim());
+                // 跳过 Retry 按钮（由 handleSmartRetry 专门处理）
+                if (retryTexts.includes(text)) continue;
                 candidates.push({ btn, text });
             }
 
@@ -155,13 +182,8 @@ function buildDetectionScript(buttonTexts) {
             for (const target of targetTexts) {
                 const match = candidates.find(c => c.text === target);
                 if (match) {
-                    // 标记所有匹配的按钮（包括低优先级的），防止后续触发再点击
-                    const ts = Date.now().toString();
-                    for (const c of candidates) {
-                        if (targetTexts.includes(c.text)) {
-                            c.btn.setAttribute(MARKER, ts);
-                        }
-                    }
+                    // 只标记被点击的按钮
+                    match.btn.setAttribute(MARKER, Date.now().toString());
                     match.btn.click();
                     return [match.text];
                 }
@@ -176,95 +198,46 @@ function buildDetectionScript(buttonTexts) {
 //  生成 MutationObserver 注入脚本（常驻 target 中）
 // ============================================================
 
-function buildObserverScript(buttonTexts, autoRetryConfig) {
+function buildObserverScript(buttonTexts, retryButtonTexts) {
     const textsJSON = JSON.stringify(buttonTexts.map(t => t.toLowerCase()));
-    const autoRetryJSON = JSON.stringify(autoRetryConfig);
+    const retryTextsJSON = JSON.stringify((retryButtonTexts || []).map(t => t.toLowerCase()));
 
     return `
         (() => {
-            // 重置重试计数器（脚本重新注入时归零）
-            window.__retryCount = 0;
+            const targetTexts = ${textsJSON};
+            const retryTexts = ${retryTextsJSON};
 
-            // 如果已有旧 Observer，先断开再重新注入（确保代码变更后生效）
+            // 如果已有旧 Observer，断开并重新注入（确保 buttonTexts 更新生效）
             if (window.__autoAcceptObserver) {
                 window.__autoAcceptObserver.disconnect();
                 window.__autoAcceptObserver = null;
             }
-
-            const targetTexts = ${textsJSON};
-            const autoRetry = ${autoRetryJSON};
             const MARKER = 'data-auto-accepted';
 
             function normalize(rawText) {
                 return rawText.trim()
-                    .replace(/\\s*(Alt|Ctrl|Shift|Cmd|Meta)[+\\-].*$/i, '')
+                    .replace(/\\\\s*(Alt|Ctrl|Shift|Cmd|Meta)[+\\\\-].*$/i, '')
                     .trim()
                     .toLowerCase();
             }
 
-            // 直接重试（不切换模型）
-            const MAX_RETRIES = autoRetry.maxRetries || 3;
-
-            async function doAutoRetry(btn) {
-                if (window.__isRetrying) return;
-
-                // 检查重试上限
-                window.__retryCount++;
-                if (window.__retryCount > MAX_RETRIES) {
-                    console.log('[AUTO-RETRY] \u2757 已达最大重试次数(' + MAX_RETRIES + ')，停止自动重试');
-                    return;
-                }
-
-                window.__isRetrying = true;
-
-                try {
-                    console.log('[AUTO-RETRY] \u{1f504} 第 ' + window.__retryCount + '/' + MAX_RETRIES + ' 次重试...');
-                    btn.setAttribute(MARKER, Date.now().toString());
-                    btn.click();
-                    console.log('[AUTO-RETRY] \u2705 已点击重试按钮');
-                } catch (e) {
-                    console.error('[AUTO-RETRY] 重试失败:', e);
-                } finally {
-                    window.__isRetrying = false;
-                }
-            }
-
             function scanAndClick(root) {
-                // 收集所有可点击的按钮
                 const buttons = (root || document).querySelectorAll('button, [role="button"]');
                 const candidates = [];
+                const now = Date.now();
                 for (const btn of buttons) {
                     if (btn.disabled) continue;
-                    if (btn.hasAttribute(MARKER)) continue;
+                    const markerTs = btn.getAttribute(MARKER);
+                    if (markerTs && (now - parseInt(markerTs, 10)) < 5000) continue;
                     const text = normalize((btn.textContent || '').trim());
-                    
-                    // 特殊处理 Retry 按钮
-                    if (autoRetry?.enabled && autoRetry.retryButtonTexts?.length > 0) {
-                        const isRetry = autoRetry.retryButtonTexts.some(rt => normalize(rt) === text);
-                        if (isRetry) {
-                            if (!window.__isRetrying && window.__retryCount < MAX_RETRIES) {
-                                btn.setAttribute(MARKER, Date.now().toString());
-                                doAutoRetry(btn);
-                            }
-                            // 超限后不跳过，让按钮留给用户手动操作
-                            continue;
-                        }
-                    }
-                    
+                    if (retryTexts.includes(text)) continue;
                     candidates.push({ btn, text });
                 }
 
-                // 按配置优先级遍历：找到最高优先级的匹配按钮就只点它
                 for (const target of targetTexts) {
                     const match = candidates.find(c => c.text === target);
                     if (match) {
-                        // 标记所有匹配的按钮（包括低优先级的），防止 Observer 再次触发时点击
-                        const ts = Date.now().toString();
-                        for (const c of candidates) {
-                            if (targetTexts.includes(c.text)) {
-                                c.btn.setAttribute(MARKER, ts);
-                            }
-                        }
+                        match.btn.setAttribute(MARKER, Date.now().toString());
                         match.btn.click();
                         return [match.text];
                     }
@@ -272,33 +245,29 @@ function buildObserverScript(buttonTexts, autoRetryConfig) {
                 return [];
             }
 
-            // 先扫描一遍现有 DOM（处理已经存在但未被点击的按钮）
             const initialClicked = scanAndClick(document);
 
-            // 创建 MutationObserver 监听 DOM 变化
             const observer = new MutationObserver((mutations) => {
                 let needScan = false;
-
                 for (const mutation of mutations) {
-                    // 有新节点被添加时需要扫描
                     if (mutation.addedNodes.length > 0) {
                         needScan = true;
                         break;
                     }
-                    // 属性变化也可能意味着按钮从 disabled 变为 enabled
                     if (mutation.type === 'attributes') {
-                        const target = mutation.target;
-                        if (target.tagName === 'BUTTON' || target.getAttribute?.('role') === 'button') {
-                            needScan = true;
-                            break;
+                        const attr = mutation.attributeName;
+                        if (attr === 'disabled' || attr === 'class') {
+                            const t = mutation.target;
+                            if (t.tagName === 'BUTTON' || t.getAttribute?.('role') === 'button') {
+                                needScan = true;
+                                break;
+                            }
                         }
                     }
                 }
-
                 if (needScan) {
                     const clicked = scanAndClick(document);
                     if (clicked.length > 0) {
-                        // 通过 console.log 输出，以便 CDP 的 Runtime.consoleAPICalled 事件捕获
                         console.log('[AUTO-ACCEPT-CLICKED]' + JSON.stringify(clicked));
                     }
                 }
@@ -308,7 +277,7 @@ function buildObserverScript(buttonTexts, autoRetryConfig) {
                 childList: true,
                 subtree: true,
                 attributes: true,
-                attributeFilter: ['disabled', 'class', 'style']
+                attributeFilter: ['disabled', 'class']
             });
 
             window.__autoAcceptObserver = observer;
@@ -320,7 +289,6 @@ function buildObserverScript(buttonTexts, autoRetryConfig) {
         })()
     `;
 }
-
 // ============================================================
 //  生成会话重命名脚本（注入到 Manager target）
 // ============================================================
@@ -485,6 +453,222 @@ function buildRenamerScript(nameMap) {
     `;
 }
 
+
+// ============================================================
+//  生成全局名称替换脚本（注入到所有 target）
+// ============================================================
+
+function buildNameReplacerScript(replacements) {
+    if (Object.keys(replacements).length === 0) return null;
+
+    const replacementsJSON = JSON.stringify(replacements);
+
+    return `
+        (() => {
+            const replacements = ${replacementsJSON};
+            const REPLACER_MARKER = 'data-name-replaced';
+            const originals = Object.keys(replacements);
+            if (originals.length === 0) return { status: 'empty' };
+
+            function replaceNames() {
+                const walker = document.createTreeWalker(
+                    document.body || document.documentElement,
+                    NodeFilter.SHOW_TEXT,
+                    null
+                );
+
+                let node;
+                while (node = walker.nextNode()) {
+                    const parent = node.parentElement;
+                    if (!parent) continue;
+                    const tag = parent.tagName;
+                    if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'TEXTAREA' || tag === 'INPUT') continue;
+
+                    const text = node.nodeValue;
+                    if (!text || text.trim().length === 0) continue;
+
+                    for (const original of originals) {
+                        if (text.includes(original)) {
+                            node.nodeValue = text.replace(original, replacements[original]);
+                            if (parent && !parent.hasAttribute(REPLACER_MARKER)) {
+                                parent.setAttribute(REPLACER_MARKER, '1');
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (window.__nameReplacer) {
+                Object.assign(window.__nameReplacer.replacements, replacements);
+                replaceNames();
+                return { status: 'updated' };
+            }
+
+            replaceNames();
+
+            const observer = new MutationObserver((mutations) => {
+                let needReplace = false;
+                for (const m of mutations) {
+                    if (m.addedNodes.length > 0) { needReplace = true; break; }
+                }
+                if (needReplace) replaceNames();
+            });
+            observer.observe(document.documentElement, { childList: true, subtree: true });
+
+            window.__nameReplacer = { observer, replacements };
+            return { status: 'injected' };
+        })()
+    `;
+}
+
+// ============================================================
+//  智能 Retry 脚本
+// ============================================================
+
+/** 轻量检测：仅检查 Retry 按钮是否存在 */
+function buildRetryDetectionScript() {
+    return `(() => {
+        const btns = document.querySelectorAll('button');
+        let hasRetry = false, hasDebugInfo = false;
+        for (const btn of btns) {
+            const t = (btn.textContent || '').trim();
+            if (t === 'Retry' && !btn.disabled) hasRetry = true;
+            if ((t === 'Copy debug info' || t === 'Copied!') && !btn.disabled) hasDebugInfo = true;
+        }
+        return hasRetry ? { hasRetry, hasDebugInfo } : null;
+    })()`;
+}
+
+/** 读取 debug info */
+function buildReadDebugInfoScript() {
+    return `(async () => {
+        const btns = document.querySelectorAll('button');
+        let debugBtn = null;
+        for (const btn of btns) {
+            const t = (btn.textContent || '').trim();
+            if ((t === 'Copy debug info' || t === 'Copied!') && !btn.disabled) debugBtn = btn;
+        }
+        if (!debugBtn) return { errorCode: null, raw: 'no debug info button' };
+        let captured = null;
+        const orig = navigator.clipboard.writeText.bind(navigator.clipboard);
+        navigator.clipboard.writeText = async (text) => { captured = text; return orig(text); };
+        debugBtn.click();
+        await new Promise(r => setTimeout(r, 300));
+        navigator.clipboard.writeText = orig;
+        if (!captured) return { errorCode: null, raw: 'clipboard capture failed' };
+        let errorCode = null, errorReason = null, errorMessage = null, modelName = null;
+        try {
+            const lines = captured.split('\\n');
+            let jsonStr = '';
+            let depth = 0;
+            let capturing = false;
+            for (const line of lines) {
+                if (!capturing && line.includes('"error"') && line.includes('{')) {
+                    capturing = true;
+                }
+                if (capturing) {
+                    jsonStr += line;
+                    for (const ch of line) {
+                        if (ch === '{') depth++;
+                        if (ch === '}') depth--;
+                    }
+                    if (depth <= 0) break;
+                }
+            }
+            if (jsonStr) {
+                const start = jsonStr.indexOf('{');
+                const obj = JSON.parse(jsonStr.substring(start));
+                errorCode = obj.error?.code;
+                errorMessage = obj.error?.message;
+                const d = obj.error?.details;
+                if (d && d.length > 0) { errorReason = d[0]?.reason; modelName = d[0]?.metadata?.model; }
+            }
+        } catch (_) {}
+        if (!errorCode) { const h = captured.match(/HTTP\\s+(\\d{3})/); if (h) errorCode = parseInt(h[1], 10); }
+        return { errorCode, errorReason, errorMessage, modelName, raw: captured.substring(0, 500) };
+    })()`;
+}
+
+/** 点击 Retry 按钮 */
+function buildClickRetryScript() {
+    return `(() => {
+        const btns = document.querySelectorAll('button');
+        for (const btn of btns) {
+            if (btn.textContent.trim() === 'Retry' && !btn.disabled) { btn.click(); return true; }
+        }
+        return false;
+    })()`;
+}
+
+/** 切换模型 */
+function buildSwitchModelScript(targetModelName) {
+    const lower = targetModelName.toLowerCase();
+    return `(async () => {
+        let trigger = null;
+        const candidates = document.querySelectorAll('div[tabindex="0"].cursor-pointer');
+        for (const el of candidates) {
+            const nameSpan = el.querySelector('span.select-none.overflow-hidden');
+            if (nameSpan) {
+                const t = nameSpan.textContent.trim();
+                if (['Gemini', 'Claude', 'GPT', 'Opus', 'Sonnet', 'Flash'].some(m => t.includes(m))) {
+                    trigger = el;
+                    break;
+                }
+            }
+        }
+        if (!trigger) return { success: false, error: 'model trigger not found' };
+        
+        trigger.click();
+        await new Promise(r => setTimeout(r, 500));
+        
+        const items = document.querySelectorAll('div.px-2.py-1.cursor-pointer');
+        for (const item of items) {
+            const nameSpan = item.querySelector('span.text-xs.font-medium span');
+            if (!nameSpan) continue;
+            if (nameSpan.textContent.trim().toLowerCase().includes('${lower}')) {
+                item.click();
+                await new Promise(r => setTimeout(r, 300));
+                return { success: true, model: nameSpan.textContent.trim() };
+            }
+        }
+        
+        trigger.click();
+        return { success: false, error: 'target model not found in dropdown' };
+    })()`;
+}
+
+/**
+ * 通过 Runtime.evaluate + Input.insertText + Enter 发送消息
+ */
+async function sendMessageViaCDP(client, message) {
+    const { Runtime, Input } = client;
+
+    const focusResult = await Runtime.evaluate({
+        expression: `(() => {
+            const el = document.querySelector('#antigravity\\\\\\\\.agentSidePanelInputBox [contenteditable="true"]');
+            if (!el) return { found: false };
+            el.focus();
+            return { found: true, tag: el.tagName };
+        })()`,
+        returnByValue: true, awaitPromise: false
+    });
+    if (!focusResult?.result?.value?.found) {
+        return { success: false, error: 'contenteditable div not found in agentSidePanelInputBox' };
+    }
+
+    await Input.dispatchKeyEvent({ type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 4 });
+    await Input.dispatchKeyEvent({ type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 4 });
+    await Input.dispatchKeyEvent({ type: 'keyDown', key: 'Backspace', code: 'Backspace' });
+    await Input.dispatchKeyEvent({ type: 'keyUp', key: 'Backspace', code: 'Backspace' });
+
+    await Input.insertText({ text: message });
+
+    await Input.dispatchKeyEvent({ type: 'keyDown', key: 'Enter', code: 'Enter' });
+    await Input.dispatchKeyEvent({ type: 'keyUp', key: 'Enter', code: 'Enter' });
+
+    return { success: true, method: 'cdp-runtime-input' };
+}
+
 // ============================================================
 //  生成 Workspace 重命名脚本（注入到 Manager target）
 // ============================================================
@@ -524,7 +708,7 @@ function buildWorkspaceRenamerScript(nameMap) {
                 const nameIndex = {};
                 for (const span of filtered) {
                     const rawName = span.getAttribute('data-original-name')
-                        || span.textContent.trim().replace(/^\u270f\ufe0f\s*/, '');
+                        || span.textContent.trim().replace(/^\ud83d\udcc2\s*/, '');
                     nameCount[rawName] = (nameCount[rawName] || 0) + 1;
                 }
 
@@ -532,7 +716,7 @@ function buildWorkspaceRenamerScript(nameMap) {
                 const result = [];
                 for (const span of filtered) {
                     const rawName = span.getAttribute('data-original-name')
-                        || span.textContent.trim().replace(/^\u270f\ufe0f\s*/, '');
+                        || span.textContent.trim().replace(/^\ud83d\udcc2\s*/, '');
                     let key;
                     if (nameCount[rawName] > 1) {
                         // 同名多个：用 name#index 区分
@@ -555,12 +739,12 @@ function buildWorkspaceRenamerScript(nameMap) {
                 for (const { span, key, rawName } of items) {
                     const entry = nameMap[key];
                     const customName = typeof entry === 'string' ? entry : entry?.name;
-                    const displayName = customName ? '\u270f\ufe0f ' + customName : null;
+                    const displayName = customName ? '\ud83d\udcc2 ' + customName : null;
                     if (displayName && span.textContent !== displayName) {
                         if (!span.hasAttribute('data-original-name')) {
                             span.setAttribute('data-original-name', rawName);
                         }
-                        span.textContent = '\u270f\ufe0f ' + customName;
+                        span.textContent = '\ud83d\udcc2 ' + customName;
                         span.title = '原始: ' + rawName;
                     }
                 }
@@ -579,7 +763,7 @@ function buildWorkspaceRenamerScript(nameMap) {
                     const wsKey = span.getAttribute('data-ws-key');
                     const currentText = span.textContent.trim();
                     const originalName = span.getAttribute('data-original-name') || currentText;
-                    const editValue = currentText.replace(/^\u270f\ufe0f\s*/, '');
+                    const editValue = currentText.replace(/^\ud83d\udcc2\s*/, '');
 
                     const input = document.createElement('input');
                     input.type = 'text';
@@ -599,7 +783,7 @@ function buildWorkspaceRenamerScript(nameMap) {
                         committed = true;
                         const newName = input.value.trim();
                         if (newName && newName !== originalName) {
-                            span.textContent = '\u270f\ufe0f ' + newName;
+                            span.textContent = '\ud83d\udcc2 ' + newName;
                             span.setAttribute('data-original-name', originalName);
                             span.title = '原始: ' + originalName;
                             nameMap[wsKey] = { name: newName, original: originalName };
@@ -677,15 +861,80 @@ function buildWorkspaceRenamerScript(nameMap) {
 //  持久连接管理器（TargetManager）
 // ============================================================
 
-let activeTargetManager = null;
-
 class TargetManager {
     constructor() {
         /** @type {Map<string, { client: any, info: any, ready: boolean }>} */
         this.connections = new Map();
-        this.detectionScript = buildDetectionScript(BUTTON_TEXTS);
-        this.observerScript = buildObserverScript(BUTTON_TEXTS, AUTO_RETRY);
-        activeTargetManager = this;
+        this.detectionScript = buildDetectionScript(BUTTON_TEXTS, RETRY_BUTTON_TEXTS);
+        this.observerScript = buildObserverScript(BUTTON_TEXTS, RETRY_BUTTON_TEXTS);
+        this.retryDetectionScript = buildRetryDetectionScript();
+        /** @type {any} browser-level CDP 连接 */
+        this.browserClient = null;
+        /** @type {Map<string, number>} 每个 target 的重试计数器 */
+        this.retryCounters = new Map();
+    }
+
+    /**
+     * 获取所有 target（合并 CDP.List 和 browser-level Target.getTargets）
+     */
+    async getAllTargets() {
+        const targetsById = new Map();
+
+        try {
+            const listTargets = await withTimeout(CDP.List({ port: PORT }), 5000, 'CDP.List');
+            for (const t of listTargets) {
+                targetsById.set(t.id, t);
+            }
+        } catch (_) { }
+
+        try {
+            if (!this.browserClient) {
+                const version = await withTimeout(CDP.Version({ port: PORT }), 5000, 'CDP.Version');
+                if (version.webSocketDebuggerUrl) {
+                    this.browserClient = await withTimeout(
+                        CDP({ target: version.webSocketDebuggerUrl }),
+                        5000, 'browser CDP connect'
+                    );
+                    this.browserClient.on('disconnect', () => {
+                        debug('Browser-level 连接已断开，将在下次轮询时重建');
+                        this.browserClient = null;
+                    });
+                }
+            }
+
+            if (this.browserClient) {
+                const { Target } = this.browserClient;
+                await withTimeout(Target.setDiscoverTargets({ discover: true }), 5000, 'setDiscoverTargets');
+                const { targetInfos } = await withTimeout(Target.getTargets(), 5000, 'getTargets');
+
+                for (const t of targetInfos) {
+                    if (!targetsById.has(t.targetId)) {
+                        targetsById.set(t.targetId, {
+                            id: t.targetId,
+                            type: t.type,
+                            title: t.title,
+                            url: t.url,
+                            webSocketDebuggerUrl: `ws://127.0.0.1:${PORT}/devtools/page/${t.targetId}`
+                        });
+                        debug(`[browser-level] 发现额外 target: [${t.type}] ${t.title} (${t.url?.substring(0, 60)})`);
+                    }
+                }
+            }
+        } catch (err) {
+            debug(`Browser-level target 发现失败: ${err.message}`);
+            if (this.browserClient) {
+                try { await this.browserClient.close(); } catch (_) { }
+                this.browserClient = null;
+            }
+        }
+
+        if (targetsById.size === 0 && this.browserClient) {
+            debug('未发现任何 target，重置 browser-level 连接');
+            try { await this.browserClient.close(); } catch (_) { }
+            this.browserClient = null;
+        }
+
+        return Array.from(targetsById.values());
     }
 
     /**
@@ -694,9 +943,13 @@ class TargetManager {
     async syncTargets() {
         let targets;
         try {
-            targets = await CDP.List({ port: PORT });
+            targets = await withTimeout(CDP.List({ port: PORT }), 5000, 'CDP.List');
         } catch (err) {
             throw new Error(`无法获取 target 列表: ${err.message}`);
+        }
+
+        if (targets.length === 0) {
+            throw new Error('未发现任何 target');
         }
 
         debug(`发现 ${targets.length} 个 target`);
@@ -711,10 +964,9 @@ class TargetManager {
             }
         }
 
-        // 对新 target 建立连接（跳过外部浏览器页面）
+        // 对新 target 建立连接（跳过外部网页）
         const newTargets = targets.filter(t => {
             if (this.connections.has(t.id)) return false;
-            // 跳过 AI 打开的外部网页（http/https），避免持久连接干扰关闭
             const url = t.url || '';
             if (url.startsWith('http://') || url.startsWith('https://')) {
                 debug(`跳过外部网页: ${t.title || url}`);
@@ -724,7 +976,10 @@ class TargetManager {
         });
         if (newTargets.length > 0) {
             debug(`发现 ${newTargets.length} 个新 target，正在建立连接...`);
-            const attachPromises = newTargets.map(t => this.attachTarget(t));
+            const attachPromises = newTargets.map(t =>
+                withTimeout(this.attachTarget(t), 10000, `attach(${t.title || t.id?.substring(0, 8)})`)
+                    .catch(err => debug(`attachTarget 超时: ${t.title || t.id} - ${err.message}`))
+            );
             await Promise.allSettled(attachPromises);
         }
 
@@ -733,7 +988,8 @@ class TargetManager {
             if (t.title === 'Manager') {
                 const conn = this.connections.get(t.id);
                 if (conn && conn.ready && !conn.renamerInjected) {
-                    await this.injectRenamer(conn.client, t.id);
+                    debug('补检: Manager target 需要注入 renamer');
+                    await this.injectRenamer(conn, t);
                 }
             }
         }
@@ -746,11 +1002,149 @@ class TargetManager {
     }
 
     /**
-     * 向 Manager target 注入会话重命名脚本
+     * 对单个 target 建立持久连接，注入 MutationObserver
      */
-    async injectRenamer(client, targetId) {
+    async attachTarget(targetInfo) {
+        let client;
         try {
+            client = await withTimeout(
+                CDP({
+                    target: targetInfo,
+                    port: PORT,
+                    local: true
+                }),
+                3000,
+                `attachTarget(${targetInfo.id?.substring(0, 8) || 'unknown'})`
+            );
+
             const { Runtime } = client;
+            await Runtime.enable();
+
+            // 监听 console.log 消息，捕获 Observer 回调
+            Runtime.consoleAPICalled(({ type, args }) => {
+                if (type === 'log' && args.length > 0) {
+                    const msg = args[0]?.value;
+                    if (typeof msg === 'string' && msg.startsWith('[AUTO-ACCEPT-CLICKED]')) {
+                        try {
+                            const clicked = JSON.parse(msg.replace('[AUTO-ACCEPT-CLICKED]', ''));
+                            for (const text of clicked) {
+                                log(`✅ 自动点击了: [${text}]  (target: ${targetInfo.title || targetInfo.url || 'unknown'})`);
+                            }
+                        } catch (_) { /* ignore parse error */ }
+                    }
+                }
+            });
+
+            // 判断 target 类型
+            const targetUrl = targetInfo.url || '';
+            const targetType = targetInfo.type || 'page';
+            const isManager = targetInfo.title === 'Manager';
+            const isWorker = targetType === 'worker' || targetType === 'service_worker';
+
+            // 跳过 worker（没有 DOM）
+            if (isWorker) {
+                debug(`跳过 worker target: ${targetInfo.id}`);
+                try { await client.close(); } catch (_) { }
+                return;
+            }
+
+            // Manager target: 注入 renamer
+            let renamerInjected = false;
+            if (isManager) {
+                renamerInjected = await this.injectRenamer({ client, info: targetInfo }, targetInfo);
+
+                // Manager 也注入按钮自动点击 Observer
+                try {
+                    await Runtime.evaluate({
+                        expression: this.observerScript,
+                        returnByValue: true,
+                        awaitPromise: false
+                    });
+                    debug('Observer 也已注入 Manager');
+                } catch (_) {}
+            } else {
+                // 普通 target: 注入按钮自动点击 Observer
+                const injectObserver = async () => {
+                    try {
+                        const result = await Runtime.evaluate({
+                            expression: this.observerScript,
+                            returnByValue: true,
+                            awaitPromise: false
+                        });
+                        const response = result?.result?.value;
+                        if (response?.status === 'injected') {
+                            debug(`Observer 已注入: ${targetInfo.title || targetInfo.id}`);
+                            if (response.initialClicked) {
+                                for (const text of response.initialClicked) {
+                                    log(`✅ 自动点击了: [${text}]  (target: ${targetInfo.title || targetInfo.url || 'unknown'})`);
+                                }
+                            }
+                        }
+                    } catch (err) {
+                        debug(`Observer 注入失败: ${err.message}`);
+                    }
+                };
+
+                await injectObserver();
+
+                // 监听页面导航/刷新：页面内容变化会导致注入的 Observer 丢失
+                try {
+                    const { Page } = client;
+                    await Page.enable();
+                    Page.frameNavigated(() => {
+                        debug(`页面导航，重新注入 Observer: ${targetInfo.title || targetInfo.id}`);
+                        setTimeout(() => injectObserver(), 500);
+                    });
+                } catch (_) { /* 部分 target 可能不支持 Page domain */ }
+
+                // 监听执行上下文销毁：webview 内容刷新时会销毁旧的上下文
+                Runtime.executionContextDestroyed(() => {
+                    debug(`执行上下文销毁，重新注入 Observer: ${targetInfo.title || targetInfo.id}`);
+                    setTimeout(() => injectObserver(), 500);
+                });
+            }
+
+            // 所有 target 都注入全局名称替换脚本
+            const replacements = getNameReplacements();
+            const replacerScript = buildNameReplacerScript(replacements);
+            if (replacerScript) {
+                try {
+                    await Runtime.evaluate({
+                        expression: replacerScript,
+                        returnByValue: true,
+                        awaitPromise: false
+                    });
+                } catch (_) { /* 忽略替换失败 */ }
+            }
+
+            // 监听连接断开事件
+            client.on('disconnect', () => {
+                debug(`Target 连接断开: ${targetInfo.id}`);
+                this.connections.delete(targetInfo.id);
+            });
+
+            this.connections.set(targetInfo.id, {
+                client,
+                info: targetInfo,
+                ready: true,
+                renamerInjected
+            });
+
+        } catch (err) {
+            debug(`连接 target 失败 (${targetInfo.id || 'unknown'}): ${err.message}`);
+            if (client) {
+                try { await client.close(); } catch (_) { /* ignore */ }
+            }
+        }
+    }
+
+    /**
+     * 向 Manager target 注入会话重命名脚本
+     * @returns {boolean} 是否注入成功
+     */
+    async injectRenamer(conn, targetInfo) {
+        try {
+            const { Runtime } = conn.client;
 
             // ---- 会话重命名 binding ----
             try {
@@ -791,9 +1185,9 @@ class TargetManager {
 
             const renamerStatus = renamerResult?.result?.value?.status;
             if (renamerStatus === 'injected') {
-                log(`🏷️  会话重命名已注入 Manager (双击会话标题可编辑)`);
+                log('🏷️  会话重命名已注入 Manager (双击会话标题可编辑)');
             } else if (renamerStatus === 'updated') {
-                debug(`会话重命名映射已更新`);
+                debug('会话重命名映射已更新');
             }
 
             // ---- 注入 Workspace 重命名脚本 ----
@@ -813,93 +1207,13 @@ class TargetManager {
             }
 
             // 标记已注入
-            const conn = this.connections.get(targetId);
-            if (conn) conn.renamerInjected = true;
+            const stored = this.connections.get(targetInfo.id);
+            if (stored) stored.renamerInjected = true;
 
+            return true;
         } catch (err) {
             debug(`注入 renamer 失败: ${err.message}`);
-        }
-    }
-
-    /**
-     * 对单个 target 建立持久连接，注入 MutationObserver
-     */
-    async attachTarget(targetInfo) {
-        let client;
-        try {
-            client = await CDP({
-                target: targetInfo,
-                port: PORT,
-                local: true
-            });
-
-            const { Runtime } = client;
-            await Runtime.enable();
-
-            // 监听 console.log 消息，捕获 Observer 回调
-            Runtime.consoleAPICalled(({ type, args }) => {
-                if (type === 'log' && args.length > 0) {
-                    const msg = args[0]?.value;
-                    if (typeof msg === 'string') {
-                        if (msg.startsWith('[AUTO-ACCEPT-CLICKED]')) {
-                            try {
-                                const clicked = JSON.parse(msg.replace('[AUTO-ACCEPT-CLICKED]', ''));
-                                for (const text of clicked) {
-                                    log(`✅ 自动点击了: [${text}]  (target: ${targetInfo.title || targetInfo.url || 'unknown'})`);
-                                }
-                            } catch (_) { /* ignore parse error */ }
-                        } else if (msg.startsWith('[AUTO-RETRY]')) {
-                            log(msg);
-                        }
-                    }
-                }
-            });
-
-            // 判断是否为 Manager target（会话列表面板）
-            const isManager = targetInfo.title === 'Manager';
-
-            if (isManager) {
-                await this.injectRenamer(client, targetInfo.id);
-            }
-
-            {
-                // ---- 所有 target: 注入按钮自动点击 Observer（含 autoRetry）----
-                const result = await Runtime.evaluate({
-                    expression: this.observerScript,
-                    returnByValue: true,
-                    awaitPromise: false
-                });
-
-                const response = result?.result?.value;
-                if (response?.status === 'injected') {
-                    debug(`Observer 已注入: ${targetInfo.title || targetInfo.id}`);
-                    if (response.initialClicked) {
-                        for (const text of response.initialClicked) {
-                            log(`✅ 自动点击了: [${text}]  (target: ${targetInfo.title || targetInfo.url || 'unknown'})`);
-                        }
-                    }
-                } else if (response?.status === 'already_injected') {
-                    debug(`Observer 已存在，跳过: ${targetInfo.title || targetInfo.id}`);
-                }
-            }
-            // 监听连接断开事件
-            client.on('disconnect', () => {
-                debug(`Target 连接断开: ${targetInfo.id}`);
-                this.connections.delete(targetInfo.id);
-            });
-
-            this.connections.set(targetInfo.id, {
-                client,
-                info: targetInfo,
-                ready: true,
-                renamerInjected: isManager
-            });
-
-        } catch (err) {
-            debug(`连接 target 失败 (${targetInfo.id || 'unknown'}): ${err.message}`);
-            if (client) {
-                try { await client.close(); } catch (_) { /* ignore */ }
-            }
+            return false;
         }
     }
 
@@ -915,6 +1229,137 @@ class TargetManager {
     }
 
     /**
+     * 智能 Retry：检测错误卡片，根据错误类型执行不同策略
+     */
+    async handleSmartRetry() {
+        for (const [id, conn] of this.connections) {
+            if (!conn.ready) continue;
+            const retryCount = this.retryCounters.get(id) || 0;
+            if (retryCount >= MAX_RETRIES) continue;
+            const title = conn.info.title || conn.info.id || '';
+            try {
+                debug(`  Smart retry 检查: ${title || id.substring(0, 8)}`);
+                const detect = await withTimeout(
+                    conn.client.Runtime.evaluate({
+                        expression: this.retryDetectionScript,
+                        returnByValue: true, awaitPromise: false
+                    }), 1500, `retryDetect(${id.substring(0, 8)})`);
+
+                const info = detect?.result?.value;
+                if (!info || !info.hasRetry) {
+                    if (retryCount > 0) {
+                        this.retryCounters.delete(id);
+                        debug(`  重试计数器已清零: ${title}`);
+                    }
+                    continue;
+                }
+
+                const newCount = retryCount + 1;
+                this.retryCounters.set(id, newCount);
+                log(`🔍 检测到 Retry 按钮 (target: ${title}, 第 ${newCount}/${MAX_RETRIES} 次)`);
+
+                if (newCount >= MAX_RETRIES) {
+                    log(`  ⚠️ 已达最大重试次数 (${MAX_RETRIES})，停止自动重试`);
+                    continue;
+                }
+
+                // 读取 debug info
+                let errorCode = null;
+                if (info.hasDebugInfo) {
+                    try {
+                        const debugResult = await withTimeout(
+                            conn.client.Runtime.evaluate({
+                                expression: buildReadDebugInfoScript(),
+                                returnByValue: true, awaitPromise: true
+                            }), 8000, `readDebugInfo(${id.substring(0, 8)})`);
+                        const errInfo = debugResult?.result?.value;
+                        if (errInfo) {
+                            errorCode = errInfo.errorCode;
+                            log(`  📋 错误详情: HTTP ${errorCode} - ${errInfo.errorReason || errInfo.errorMessage || 'unknown'}`);
+                        }
+                    } catch (debugErr) {
+                        debug(`  读取 debug info 失败: ${debugErr.message}`);
+                    }
+                }
+
+                // 根据错误码执行策略
+                if (errorCode === 400 && MODEL_FALLBACK.length > 0) {
+                    const curModel = await conn.client.Runtime.evaluate({
+                        expression: `(() => { const b = document.querySelector('[role="button"][aria-haspopup="dialog"]'); return b ? b.textContent.trim() : null; })()`,
+                        returnByValue: true, awaitPromise: false
+                    });
+                    const originalModel = curModel?.result?.value;
+
+                    let targetModel = MODEL_FALLBACK[0];
+                    if (originalModel) {
+                        const lowerOriginal = originalModel.toLowerCase();
+                        let currentIdx = -1;
+                        for (let i = 0; i < MODEL_FALLBACK.length; i++) {
+                            if (lowerOriginal.includes(MODEL_FALLBACK[i].toLowerCase())) {
+                                currentIdx = i;
+                                break;
+                            }
+                        }
+                        targetModel = MODEL_FALLBACK[(currentIdx + 1) % MODEL_FALLBACK.length];
+                    }
+
+                    log(`  ⚠️ 400 错误: 切到 ${targetModel} → Retry → 切回 → 发送"${CONTINUE_MESSAGE}"`);
+
+                    const sw = await withTimeout(conn.client.Runtime.evaluate({
+                        expression: buildSwitchModelScript(targetModel),
+                        returnByValue: true, awaitPromise: true
+                    }), 5000, 'switchModel');
+                    if (!sw?.result?.value?.success) {
+                        log(`  ❌ 切换模型失败，直接 Retry`);
+                        await conn.client.Runtime.evaluate({ expression: buildClickRetryScript(), returnByValue: true, awaitPromise: false });
+                        continue;
+                    }
+                    log(`  ✅ 已切换到: ${sw.result.value.model}`);
+                    await sleep(500);
+
+                    await conn.client.Runtime.evaluate({ expression: buildClickRetryScript(), returnByValue: true, awaitPromise: false });
+                    log(`  ✅ 已点击 Retry`);
+                    await sleep(1000);
+
+                    const returnTo = RETURN_MODEL || originalModel;
+                    if (returnTo) {
+                        try {
+                            const swBack = await withTimeout(conn.client.Runtime.evaluate({
+                                expression: buildSwitchModelScript(returnTo),
+                                returnByValue: true, awaitPromise: true
+                            }), 5000, 'switchBack');
+                            if (swBack?.result?.value?.success) log(`  ✅ 已切回: ${swBack.result.value.model}`);
+                            else log(`  ⚠️ 切回失败: ${swBack?.result?.value?.error}`);
+                        } catch (swErr) {
+                            log(`  ⚠️ 切回异常: ${swErr.message}`);
+                        }
+                    }
+                    await sleep(500);
+
+                    try {
+                        const send = await withTimeout(
+                            sendMessageViaCDP(conn.client, CONTINUE_MESSAGE),
+                            10000, 'sendMsg'
+                        );
+                        if (send?.success) log(`  ✅ 已发送"${CONTINUE_MESSAGE}"`);
+                        else log(`  ⚠️ 发送失败: ${send?.error}`);
+                    } catch (sendErr) {
+                        log(`  ⚠️ 发送异常: ${sendErr.message}`);
+                    }
+
+                    log(`  🎉 400 错误恢复完成 (target: ${title})`);
+                } else {
+                    log(`  🔄 HTTP ${errorCode || '未知'} 错误，直接 Retry...`);
+                    await conn.client.Runtime.evaluate({ expression: buildClickRetryScript(), returnByValue: true, awaitPromise: false });
+                    log(`  ✅ 已自动 Retry (target: ${title})`);
+                }
+            } catch (err) {
+                debug(`Smart retry 失败 (${id}): ${err.message}`);
+            }
+        }
+    }
+
+    /**
      * 对所有活跃连接执行一次 fallback 扫描（兜底轮询）
      */
     async fallbackScan() {
@@ -922,11 +1367,15 @@ class TargetManager {
         for (const [id, conn] of this.connections) {
             if (!conn.ready) continue;
             try {
-                const result = await conn.client.Runtime.evaluate({
-                    expression: this.detectionScript,
-                    returnByValue: true,
-                    awaitPromise: false
-                });
+                const result = await withTimeout(
+                    conn.client.Runtime.evaluate({
+                        expression: this.detectionScript,
+                        returnByValue: true,
+                        awaitPromise: false
+                    }),
+                    5000,
+                    `fallbackScan(${id.substring(0, 8)})`
+                );
 
                 if (result?.result?.value) {
                     const clicked = result.result.value;
@@ -937,7 +1386,6 @@ class TargetManager {
                 }
             } catch (err) {
                 debug(`Fallback 扫描失败 (${id}): ${err.message}`);
-                // 连接可能已失效，标记为待清理
                 this.connections.delete(id);
             }
         }
@@ -952,6 +1400,10 @@ class TargetManager {
             try { await conn.client.close(); } catch (_) { /* ignore */ }
         }
         this.connections.clear();
+        if (this.browserClient) {
+            try { await this.browserClient.close(); } catch (_) { }
+            this.browserClient = null;
+        }
     }
 }
 
@@ -1017,13 +1469,13 @@ async function scanAllTargets(detectionScript) {
 // ============================================================
 
 async function mainLoop() {
-    const detectionScript = buildDetectionScript(BUTTON_TEXTS);
+    const detectionScript = buildDetectionScript(BUTTON_TEXTS, RETRY_BUTTON_TEXTS);
     let consecutiveErrors = 0;
     let connected = false;
     let pollCount = 0;
     const HEARTBEAT_POLLS = Math.round(30000 / POLL_INTERVAL);
 
-    // 持久模式下的 fallback 轮询间隔（每 N 次 sync 做一次 fallback）
+    // 持久模式下的 fallback 轮询间隔（MutationObserver 是主力，fallback 仅兜底）
     const FALLBACK_INTERVAL = Math.max(1, Math.round(5000 / POLL_INTERVAL));
 
     const targetManager = USE_PERSISTENT_MODE ? new TargetManager() : null;
@@ -1040,60 +1492,62 @@ async function mainLoop() {
     log('==========================================');
     log('');
     log('⏳ 等待连接 Antigravity IDE...');
-    log('  请确保 IDE 已添加 --remote-debugging-port=9222 启动参数');
+    log(`  请确保 IDE 已添加 --remote-debugging-port=${PORT} 启动参数`);
     log('');
 
     async function poll() {
+        // 1. syncTargets（可能超时，但不应阻止后续的 smartRetry）
         try {
-            let targetCount;
+            await withTimeout((async () => {
+                let targetCount;
 
-            if (USE_PERSISTENT_MODE) {
-                // 持久模式：同步 target 列表 + 定期 fallback 扫描
-                const stats = await targetManager.syncTargets();
-                targetCount = stats.total;
-
-                // 每隔一段时间做一次 fallback 扫描（兜底）
-                if (pollCount > 0 && pollCount % FALLBACK_INTERVAL === 0) {
-                    await targetManager.fallbackScan();
-                }
-            } else {
-                // 传统模式：每次轮询注入检测脚本
-                targetCount = await scanAllTargets(detectionScript);
-            }
-
-            // 首次连接成功时打印确认
-            if (!connected) {
-                connected = true;
-                log(`🔗 已连接到 Antigravity IDE，检测到 ${targetCount} 个渲染进程`);
                 if (USE_PERSISTENT_MODE) {
-                    log('🔄 已启用持久连接模式，MutationObserver 实时监听中...');
+                    const stats = await targetManager.syncTargets();
+                    targetCount = stats.total;
+                } else {
+                    targetCount = await scanAllTargets(detectionScript);
                 }
-                log('👀 正在监听确认按钮，有操作时会自动点击...');
-                log('');
-            } else if (consecutiveErrors > 0) {
-                log(`🔗 已重新连接到 Antigravity IDE（检测到 ${targetCount} 个进程）`);
-                if (USE_PERSISTENT_MODE) {
-                    log('🔄 持久连接已恢复');
+
+                // 首次连接成功时打印确认
+                if (!connected) {
+                    connected = true;
+                    log(`🔗 已连接到 Antigravity IDE，检测到 ${targetCount} 个渲染进程`);
+                    if (USE_PERSISTENT_MODE) {
+                        log('🔄 已启用持久连接模式，MutationObserver 实时监听中...');
+                    }
+                    log('👀 正在监听确认按钮，有操作时会自动点击...');
+                    log('');
+                } else if (consecutiveErrors > 0) {
+                    log(`🔗 已重新连接到 Antigravity IDE（检测到 ${targetCount} 个进程）`);
+                    if (USE_PERSISTENT_MODE) {
+                        log('🔄 持久连接已恢复');
+                    }
                 }
-            }
 
-            consecutiveErrors = 0;
-            pollCount++;
+                consecutiveErrors = 0;
+                pollCount++;
 
-            // 心跳日志
-            if (pollCount % HEARTBEAT_POLLS === 0) {
-                const connInfo = USE_PERSISTENT_MODE
-                    ? `，持久连接 ${targetManager.connections.size} 个`
-                    : '';
-                log(`💓 运行中... 检测到 ${targetCount} 个渲染进程${connInfo}`);
-            }
+                // 心跳日志
+                if (pollCount % HEARTBEAT_POLLS === 0) {
+                    const connInfo = USE_PERSISTENT_MODE
+                        ? `，持久连接 ${targetManager.connections.size} 个`
+                        : '';
+                    log(`💓 运行中... 检测到 ${targetCount} 个渲染进程${connInfo}`);
+                }
+            })(), 60000, 'poll');
         } catch (err) {
             consecutiveErrors++;
-            connected = false;
 
             if (USE_PERSISTENT_MODE) {
-                // 连接失败时清理所有持久连接
-                await targetManager.closeAll();
+                const isTimeout = err.message && err.message.includes('超时');
+                if (!isTimeout) {
+                    connected = false;
+                    await targetManager.closeAll();
+                } else {
+                    debug('poll 超时但不清理连接（连接可能仍然有效）');
+                }
+            } else {
+                connected = false;
             }
 
             if (consecutiveErrors === 1) {
@@ -1105,9 +1559,21 @@ async function mainLoop() {
                 error('自动重连已禁用，脚本退出。');
                 process.exit(1);
             }
+        }
 
-            await sleep(RECONNECT_INTERVAL);
-            return;
+        // 2. 智能 Retry（独立执行，不受 syncTargets 超时影响）
+        if (USE_PERSISTENT_MODE && targetManager.connections.size > 0) {
+            try {
+                await withTimeout(targetManager.handleSmartRetry(), 15000, 'smartRetry');
+            } catch (e) {
+                debug(`Smart retry 超时或异常: ${e.message}`);
+            }
+
+            if (pollCount > 0 && pollCount % FALLBACK_INTERVAL === 0) {
+                try {
+                    await targetManager.fallbackScan();
+                } catch (_) { }
+            }
         }
 
         await sleep(POLL_INTERVAL);
@@ -1125,6 +1591,21 @@ async function mainLoop() {
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * 给 Promise 加超时保护，防止 CDP 操作永久挂起
+ */
+function withTimeout(promise, ms, label = 'operation') {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            reject(new Error(`${label} 超时 (${ms}ms)`));
+        }, ms);
+        promise.then(
+            (val) => { clearTimeout(timer); resolve(val); },
+            (err) => { clearTimeout(timer); reject(err); }
+        );
+    });
 }
 
 // ============================================================

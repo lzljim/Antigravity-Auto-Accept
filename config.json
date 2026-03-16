@@ -18,11 +18,12 @@
         "modelFallback": [
             "Claude Opus 4.6 (Thinking)",
             "Claude Sonnet 4.6 (Thinking)",
+            "GPT-OSS 120B (Medium)",
             "Gemini 3.1 Pro (High)"
         ],
         "retryButtonTexts": [
             "Retry"
         ],
-        "maxRetries": 3
+        "maxRetries": 4
     }
 }
