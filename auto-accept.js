@@ -76,21 +76,7 @@ function saveSessionName(uuid, name, original) {
     return names;
 }
 
-/**
- * 从 session-names.json 获取"原始名称 → 自定义名称"映射
- */
-function getNameReplacements() {
-    const names = loadSessionNames();
-    const replacements = {};
-    for (const [uuid, entry] of Object.entries(names)) {
-        const customName = typeof entry === 'string' ? entry : entry.name;
-        const originalName = typeof entry === 'string' ? null : entry.original;
-        if (originalName && customName) {
-            replacements[originalName] = customName;
-        }
-    }
-    return replacements;
-}
+
 
 // ============================================================
 //  Workspace 名称映射（持久化）
@@ -454,72 +440,7 @@ function buildRenamerScript(nameMap) {
 }
 
 
-// ============================================================
-//  生成全局名称替换脚本（注入到所有 target）
-// ============================================================
 
-function buildNameReplacerScript(replacements) {
-    if (Object.keys(replacements).length === 0) return null;
-
-    const replacementsJSON = JSON.stringify(replacements);
-
-    return `
-        (() => {
-            const replacements = ${replacementsJSON};
-            const REPLACER_MARKER = 'data-name-replaced';
-            const originals = Object.keys(replacements);
-            if (originals.length === 0) return { status: 'empty' };
-
-            function replaceNames() {
-                const walker = document.createTreeWalker(
-                    document.body || document.documentElement,
-                    NodeFilter.SHOW_TEXT,
-                    null
-                );
-
-                let node;
-                while (node = walker.nextNode()) {
-                    const parent = node.parentElement;
-                    if (!parent) continue;
-                    const tag = parent.tagName;
-                    if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'TEXTAREA' || tag === 'INPUT') continue;
-
-                    const text = node.nodeValue;
-                    if (!text || text.trim().length === 0) continue;
-
-                    for (const original of originals) {
-                        if (text.includes(original)) {
-                            node.nodeValue = text.replace(original, replacements[original]);
-                            if (parent && !parent.hasAttribute(REPLACER_MARKER)) {
-                                parent.setAttribute(REPLACER_MARKER, '1');
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (window.__nameReplacer) {
-                Object.assign(window.__nameReplacer.replacements, replacements);
-                replaceNames();
-                return { status: 'updated' };
-            }
-
-            replaceNames();
-
-            const observer = new MutationObserver((mutations) => {
-                let needReplace = false;
-                for (const m of mutations) {
-                    if (m.addedNodes.length > 0) { needReplace = true; break; }
-                }
-                if (needReplace) replaceNames();
-            });
-            observer.observe(document.documentElement, { childList: true, subtree: true });
-
-            window.__nameReplacer = { observer, replacements };
-            return { status: 'injected' };
-        })()
-    `;
-}
 
 // ============================================================
 //  智能 Retry 脚本
@@ -1104,18 +1025,7 @@ class TargetManager {
                 });
             }
 
-            // 所有 target 都注入全局名称替换脚本
-            const replacements = getNameReplacements();
-            const replacerScript = buildNameReplacerScript(replacements);
-            if (replacerScript) {
-                try {
-                    await Runtime.evaluate({
-                        expression: replacerScript,
-                        returnByValue: true,
-                        awaitPromise: false
-                    });
-                } catch (_) { /* 忽略替换失败 */ }
-            }
+
 
             // 监听连接断开事件
             client.on('disconnect', () => {
