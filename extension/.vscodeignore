@@ -1,0 +1,10 @@
+.vscode/**
+src/**
+scripts/**
+node_modules/**
+!node_modules/antigravity-sdk/**
+tsconfig.json
+esbuild.js
+**/*.ts
+**/*.map
+.gitignore
