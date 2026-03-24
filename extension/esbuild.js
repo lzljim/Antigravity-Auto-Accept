@@ -21,7 +21,7 @@ async function main() {
         mainFields: ['module', 'main'],
     });
 
-    // ─── Entry 2: MCP Server (ESM, 全打包) ───
+    // ─── Entry 2: MCP Server (ESM) ───
     const mcpCtx = await esbuild.context({
         entryPoints: ['mcp/index.ts'],
         bundle: true,
@@ -31,10 +31,8 @@ async function main() {
         sourcesContent: false,
         platform: 'node',
         outfile: 'dist/mcp-server.mjs',
-        // MCP Server 独立运行，打包所有依赖（不 external）
-        external: [],
+        external: [],  // 全量打包，不依赖运行时 node_modules
         logLevel: 'info',
-        mainFields: ['module', 'main'],
         banner: {
             // ESM 中 __dirname / __filename polyfill
             js: `import{fileURLToPath as __f}from'url';import{dirname as __d}from'path';const __filename=__f(import.meta.url);const __dirname=__d(__filename);`,

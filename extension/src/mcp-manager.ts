@@ -40,6 +40,7 @@ export class McpManager {
         try {
             this.process = spawn('node', [serverPath], {
                 stdio: ['pipe', 'pipe', 'pipe'],
+                cwd: this.extensionPath, // 确保 node_modules 中的 external 依赖可被找到
                 env: { ...process.env, NODE_NO_WARNINGS: '1' },
             });
 

@@ -27,6 +27,7 @@ Desktop.ini
 # Build output
 dist/
 build/
+*.vsix
 
 # User local config
 session-names.json

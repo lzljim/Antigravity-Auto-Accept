@@ -35,6 +35,10 @@
       {
         "command": "autoAccept.resetCount",
         "title": "Auto Accept: Reset Count"
+      },
+      {
+        "command": "autoAccept.openDashboard",
+        "title": "Auto Accept: Open Dashboard"
       }
     ],
     "viewsContainers": {
@@ -42,7 +46,7 @@
         {
           "id": "autoAcceptContainer",
           "title": "Auto Accept",
-          "icon": "$(robot)"
+          "icon": "./images/icon.svg"
         }
       ]
     },

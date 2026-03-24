@@ -20,7 +20,7 @@ export class StatusBarManager implements vscode.Disposable {
             vscode.StatusBarAlignment.Right,
             100,
         );
-        this.item.command = 'autoAccept.toggle';
+        this.item.command = 'autoAccept.openDashboard';
         this.update();
         this.item.show();
     }
@@ -66,11 +66,11 @@ export class StatusBarManager implements vscode.Disposable {
 
         if (!enabled) {
             this.item.text = '$(circle-slash) Auto Accept: OFF';
-            this.item.tooltip = '点击开启自动接受（Ctrl+Shift+A）';
+            this.item.tooltip = '点击打开 Dashboard\n切换开关: Ctrl+Shift+A';
             this.item.backgroundColor = undefined;
         } else if (this._error) {
             this.item.text = '$(error) Auto Accept: ERR';
-            this.item.tooltip = `❌ 错误: ${this._error}\n\n点击切换开关`;
+            this.item.tooltip = `❌ 错误: ${this._error}\n\n点击打开 Dashboard`;
             this.item.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
         } else if (!this._connected) {
             this.item.text = '$(loading~spin) Auto Accept';
@@ -83,7 +83,7 @@ export class StatusBarManager implements vscode.Disposable {
                 `🔄 已重试: ${this._retryCount}`,
                 `📡 模式: SDK信号 + CDP执行`,
                 '',
-                '点击切换开关（Ctrl+Shift+A）',
+                '点击打开 Dashboard | 切换开关: Ctrl+Shift+A',
             ].join('\n');
             this.item.backgroundColor = undefined;
         }

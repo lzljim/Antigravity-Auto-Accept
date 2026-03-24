@@ -86,6 +86,10 @@ export async function activate(context: vscode.ExtensionContext) {
             vscode.window.showInformationMessage('🔁 Auto Accept 计数器已重置');
         }),
 
+        vscode.commands.registerCommand('autoAccept.openDashboard', () => {
+            vscode.commands.executeCommand('autoAccept.dashboard.focus');
+        }),
+
         vscode.commands.registerCommand('autoAccept.exploreApi', () => {
             exploreApi(acceptor!, sdk, logger);
         }),
