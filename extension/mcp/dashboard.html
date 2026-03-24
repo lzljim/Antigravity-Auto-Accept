@@ -1,0 +1,1118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MCP Task Dashboard</title>
+<style>
+/* ─── CSS Reset & Variables ─────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #141414; --bg-card: #1f1f1f; --bg-hover: #2a2a2a;
+  --border: #303030; --text: #e5e5e5; --text-sec: #8c8c8c; --text-dim: #595959;
+  --primary: #6366f1; --primary-bg: rgba(99,102,241,0.12);
+  --blue: #1677ff; --green: #52c41a; --orange: #fa8c16;
+  --yellow: #faad14; --red: #ff4d4f; --purple: #722ed1;
+  --radius: 8px; --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+body { font-family: var(--font); background: var(--bg); color: var(--text); line-height: 1.5; }
+a { color: var(--primary); text-decoration: none; }
+
+/* ─── Layout ─────────────────────── */
+.header {
+  background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 24px; height: 56px; position: sticky; top: 0; z-index: 10;
+}
+.header h1 { font-size: 18px; font-weight: 600; color: #fff; }
+.header h1 span { color: #818cf8; }
+.header-right { display: flex; align-items: center; gap: 8px; color: rgba(255,255,255,0.65); font-size: 13px; }
+.restart-server {
+  padding: 4px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.7);
+  font-family: var(--font); transition: all 0.15s; margin-left: 8px;
+}
+.restart-server:hover { background: rgba(255,77,79,0.2); border-color: rgba(255,77,79,0.5); color: #ff7875; }
+
+.live-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+  display: inline-block; animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+.content { max-width: 1400px; margin: 0 auto; padding: 24px; width: 100%; }
+
+/* ─── Tabs ─────────────────────── */
+.tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 24px; gap: 0; overflow-x: auto; }
+.tab {
+  padding: 10px 20px; cursor: pointer; font-size: 15px; white-space: nowrap;
+  color: var(--text-sec); border-bottom: 2px solid transparent; transition: all 0.2s;
+  background: none; border-top: 0; border-left: 0; border-right: 0; font-family: var(--font);
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+/* ─── Stats Grid ─────────────────────── */
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.stat-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px; text-align: center;
+}
+.stat-label { font-size: 12px; color: var(--text-sec); margin-bottom: 4px; }
+.stat-value { font-size: 28px; font-weight: 700; }
+
+/* ─── Cards Grid ─────────────────────── */
+.cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+
+/* ─── Task Card ─────────────────────── */
+.task-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px; transition: border-color 0.2s;
+}
+.task-card:hover { border-color: var(--primary); }
+.task-card.p-urgent { border-left: 4px solid var(--red); }
+.task-card.p-high { border-left: 4px solid var(--orange); }
+.task-card.p-medium { border-left: 4px solid var(--yellow); }
+.task-card.p-low { border-left: 4px solid var(--text-dim); }
+.task-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.task-title { font-size: 15px; font-weight: 600; flex: 1; }
+.task-desc { font-size: 13px; color: var(--text-sec); margin: 8px 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.task-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; font-size: 12px; color: var(--text-sec); }
+.task-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+
+/* ─── Tags / Badges ─────────────────────── */
+.tag {
+  display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500;
+  background: var(--bg); border: 1px solid var(--border);
+}
+.tag-blue { background: rgba(22,119,255,0.15); border-color: rgba(22,119,255,0.3); color: #4096ff; }
+.tag-orange { background: rgba(250,140,22,0.15); border-color: rgba(250,140,22,0.3); color: #faa93e; }
+.tag-green { background: rgba(82,196,26,0.15); border-color: rgba(82,196,26,0.3); color: #73d13d; }
+.tag-red { background: rgba(255,77,79,0.15); border-color: rgba(255,77,79,0.3); color: #ff7875; }
+.tag-purple { background: rgba(114,46,209,0.15); border-color: rgba(114,46,209,0.3); color: #9254de; }
+
+/* ─── Progress Bar ─────────────────────── */
+.progress-bar { height: 4px; background: var(--border); border-radius: 2px; margin-top: 10px; overflow: hidden; }
+.progress-fill { height: 100%; background: var(--primary); border-radius: 2px; transition: width 0.3s; }
+
+/* ─── Blocked Alert ─────────────────────── */
+.blocked-alert {
+  margin-top: 8px; padding: 8px 12px; border-radius: 6px; font-size: 12px;
+  background: rgba(255,77,79,0.08); border: 1px solid rgba(255,77,79,0.2); color: #ff7875;
+}
+
+/* ─── Filter Tabs (sub-level) ─────────────────────── */
+.filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.filter-btn {
+  padding: 4px 14px; border-radius: 16px; font-size: 13px; cursor: pointer;
+  background: var(--bg-card); border: 1px solid var(--border); color: var(--text-sec);
+  font-family: var(--font); transition: all 0.2s;
+}
+.filter-btn:hover { border-color: var(--primary); color: var(--text); }
+.filter-btn.active { background: var(--primary-bg); border-color: var(--primary); color: var(--primary); }
+
+/* ─── Schedule ─────────────────────── */
+.ws-group { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; overflow: hidden; }
+.ws-group-header { padding: 12px 16px; font-weight: 600; font-size: 14px; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); }
+.batch-label { font-size: 12px; color: var(--text-sec); font-weight: 600; padding: 8px 16px 4px; }
+.slot-row { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-radius: 0; margin: 0; }
+.slot-row:hover { background: var(--bg-hover); }
+.slot-num { font-size: 12px; color: var(--text-sec); font-weight: 600; min-width: 48px; }
+.slot-title { flex: 1; font-size: 14px; }
+.slot-time { font-size: 12px; color: var(--text-sec); }
+
+/* ─── Blocked List ─────────────────────── */
+.blocked-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-left: 4px solid var(--red);
+  border-radius: var(--radius); padding: 16px; margin-bottom: 12px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.blocked-card .info { flex: 1; }
+.blocked-card .title { font-weight: 600; font-size: 15px; }
+.blocked-card .reason { font-size: 13px; color: var(--text-sec); margin-top: 4px; }
+
+/* ─── Section Title ─────────────────────── */
+.section-title { font-size: 16px; font-weight: 600; margin: 24px 0 12px; }
+.section-title:first-child { margin-top: 0; }
+.divider { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+
+/* ─── Empty ─────────────────────── */
+.empty { text-align: center; color: var(--text-sec); padding: 48px; font-size: 14px; }
+.empty-icon { font-size: 32px; margin-bottom: 8px; }
+
+/* ─── Week Plan ─────────────────────── */
+.week-header { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 20px; }
+.week-title { font-size: 18px; font-weight: 700; margin-bottom: 12px; }
+.week-goals { list-style: none; margin: 0; padding: 0; }
+.week-goals li { padding: 6px 0; font-size: 14px; color: var(--text); }
+.week-goals li::before { content: '🎯 '; }
+.week-progress-bar { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; margin-top: 16px; }
+.week-progress-fill { height: 100%; border-radius: 4px; transition: width 0.5s; background: linear-gradient(90deg, var(--primary), var(--green)); }
+.week-progress-text { font-size: 13px; color: var(--text-sec); margin-top: 6px; display: flex; justify-content: space-between; }
+.week-days { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-top: 20px; }
+.day-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; transition: border-color 0.2s; }
+.day-card:hover { border-color: var(--primary); }
+.day-card.is-today { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+.day-card-header { padding: 10px 14px; font-size: 13px; font-weight: 600; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+.day-card.is-today .day-card-header { background: var(--primary-bg); color: var(--primary); }
+.day-card-body { padding: 8px 14px; min-height: 60px; }
+.day-task { font-size: 12px; padding: 4px 0; display: flex; align-items: center; gap: 6px; }
+.day-task-icon { flex-shrink: 0; }
+.day-task-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.day-empty { font-size: 12px; color: var(--text-dim); padding: 8px 0; text-align: center; }
+.week-task-list { margin-top: 20px; }
+.week-task-row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; transition: border-color 0.2s; }
+.week-task-row:hover { border-color: var(--primary); }
+
+/* ─── Action Buttons ─────────────────────── */
+.task-actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+.action-btn {
+  padding: 4px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-sec);
+  font-family: var(--font); transition: all 0.15s; display: flex; align-items: center; gap: 4px;
+}
+.action-btn:hover { border-color: var(--primary); color: var(--text); background: var(--bg-hover); }
+.action-btn.primary { background: var(--primary-bg); border-color: var(--primary); color: var(--primary); }
+.action-btn.primary:hover { background: var(--primary); color: #fff; }
+.action-btn.success { background: rgba(82,196,26,0.1); border-color: rgba(82,196,26,0.3); color: var(--green); }
+.action-btn.success:hover { background: var(--green); color: #fff; }
+.action-btn.danger { background: rgba(255,77,79,0.1); border-color: rgba(255,77,79,0.3); color: var(--red); }
+.action-btn.danger:hover { background: var(--red); color: #fff; }
+
+/* ─── Review State ─────────────────────── */
+.task-card.s-review { border-color: var(--yellow); box-shadow: 0 0 0 1px var(--yellow); }
+.tag-yellow { background: rgba(250,173,20,0.15); border-color: rgba(250,173,20,0.3); color: #faad14; }
+
+/* ─── Notification Area ─────────────────────── */
+.notify-area { margin-bottom: 24px; }
+.notify-item {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px 16px; margin-bottom: 8px; display: flex; align-items: center; gap: 12px;
+  animation: notifyPulse 2s ease-in-out infinite;
+}
+.notify-item.type-review { border-left: 4px solid var(--yellow); }
+.notify-item.type-blocked { border-left: 4px solid var(--red); }
+.notify-item.type-idle { border-left: 4px solid var(--blue); }
+.notify-item.type-ready { border-left: 4px solid var(--green); }
+.notify-item .notify-icon { font-size: 20px; flex-shrink: 0; }
+.notify-item .notify-text { flex: 1; font-size: 14px; }
+.notify-item .notify-text .sub { font-size: 12px; color: var(--text-sec); margin-top: 2px; }
+.notify-item .notify-actions { display: flex; gap: 6px; }
+@keyframes notifyPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.85; } }
+
+/* ─── Toast ─────────────────────── */
+.toast-container { position: fixed; top: 64px; right: 24px; z-index: 999; display: flex; flex-direction: column; gap: 8px; }
+.toast {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px 20px; font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+  animation: toastIn 0.3s ease-out; min-width: 200px;
+}
+.toast.success { border-left: 4px solid var(--green); }
+.toast.error { border-left: 4px solid var(--red); }
+.toast.info { border-left: 4px solid var(--blue); }
+@keyframes toastIn { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: none; } }
+
+/* ─── Log Panel ───────────────────────── */
+.log-panel {
+  background: #0d1117; border: 1px solid var(--border); border-radius: var(--radius);
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace; font-size: 13px;
+  line-height: 1.6; overflow: hidden; display: flex; flex-direction: column; max-height: calc(100vh - 180px);
+}
+.log-header {
+  display: flex; justify-content: space-between; align-items: center; padding: 10px 16px;
+  background: rgba(255,255,255,0.03); border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.log-header .log-title { font-size: 14px; font-weight: 600; color: var(--text); font-family: var(--font); }
+.log-header .log-count { font-size: 12px; color: var(--text-sec); font-family: var(--font); }
+.log-body { overflow-y: auto; padding: 12px 0; flex: 1; min-height: 0; }
+.log-body::-webkit-scrollbar { width: 8px; }
+.log-body::-webkit-scrollbar-track { background: #161b22; border-radius: 4px; }
+.log-body::-webkit-scrollbar-thumb { background: #484f58; border-radius: 4px; }
+.log-body::-webkit-scrollbar-thumb:hover { background: #6e7681; }
+.log-line { padding: 1px 16px; display: flex; gap: 12px; transition: background 0.15s; }
+.log-line:hover { background: rgba(255,255,255,0.04); }
+.log-time { color: #484f58; min-width: 80px; flex-shrink: 0; user-select: none; }
+.log-text { color: #c9d1d9; word-break: break-all; white-space: pre-wrap; }
+.log-line.type-stderr .log-text { color: #f97583; }
+.log-line.type-system .log-text { color: #79c0ff; font-style: italic; }
+.log-line.new-entry { animation: logFlash 1s ease-out; }
+@keyframes logFlash { from { background: rgba(99,102,241,0.15); } to { background: transparent; } }
+.log-empty { text-align: center; color: var(--text-sec); padding: 48px; font-family: var(--font); font-size: 14px; }
+.log-empty-icon { font-size: 32px; margin-bottom: 8px; }
+.log-actions { display: flex; gap: 8px; }
+.log-actions button {
+  padding: 4px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-sec);
+  font-family: var(--font); transition: all 0.15s;
+}
+.log-actions button:hover { border-color: var(--primary); color: var(--text); }
+
+/* ─── Session Cards ───────────────── */
+.sessions-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.session-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; transition: border-color 0.2s;
+}
+.session-card:hover { border-color: var(--primary); }
+.session-card.s-working { border-left: 3px solid var(--green); }
+.session-card.s-idle { border-left: 3px solid var(--yellow); }
+.session-top { display: flex; align-items: center; gap: 8px; }
+.session-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.session-dot.working { background: var(--green); animation: pulse 2s ease-in-out infinite; }
+.session-dot.idle { background: var(--yellow); }
+.session-name { font-weight: 600; font-size: 14px; color: var(--text); flex: 1; }
+.session-meta { font-size: 12px; color: var(--text-sec); display: flex; flex-direction: column; gap: 3px; }
+.session-empty { text-align: center; color: var(--text-sec); padding: 20px; font-size: 13px; }
+
+/* ─── Responsive ─────────────────────── */
+@media (max-width: 640px) {
+  .content { padding: 12px; }
+  .stats-grid { grid-template-columns: repeat(3, 1fr); }
+  .cards-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>📋 <span>MCP</span> Task Dashboard</h1>
+  <div class="header-right">
+    <span class="live-dot"></span> 实时同步
+    <span id="lastUpdate" style="color:rgba(255,255,255,0.45);font-size:12px"></span>
+    <button class="restart-server" onclick="restartServer()">🔄 重启服务</button>
+  </div>
+</div>
+
+<div class="content">
+  <div class="tabs" id="mainTabs">
+    <button class="tab active" data-tab="overview">📊 概览</button>
+    <button class="tab" data-tab="week">📅 周计划</button>
+    <button class="tab" data-tab="tasks">📋 任务</button>
+    <button class="tab" data-tab="schedule">🗓️ 日程</button>
+    <button class="tab" data-tab="blocked">⛔ 阻塞</button>
+    <button class="tab" data-tab="logs">📝 日志</button>
+  </div>
+  <div id="tabContent"></div>
+</div>
+
+<script>
+// ─── State ───────────────────────────────────────
+let state = { tasks: [], schedule: null, weekPlan: null, weekSchedules: {}, weekDates: [] };
+let logEntries = [];
+let logAutoScroll = true;
+let aaStatus = { running: false, pid: null, scriptFound: false };
+let sessions = [];
+
+// 从 URL hash 恢复 Tab 状态（支持刷新后自动切换）
+const VALID_TABS = ['overview', 'week', 'tasks', 'schedule', 'blocked', 'logs'];
+function getTabFromHash() {
+  const hash = location.hash.slice(1); // 去掉 #
+  return VALID_TABS.includes(hash) ? hash : 'overview';
+}
+let activeTab = getTabFromHash();
+let taskFilter = 'all';
+
+const STATUS_COLOR = { todo: 'blue', 'in-progress': 'orange', review: 'yellow', done: 'green', blocked: 'red' };
+const STATUS_LABEL = { todo: '待做', 'in-progress': '进行中', review: '待审核', done: '已完成', blocked: '阻塞' };
+const PRIORITY_COLOR = { urgent: 'var(--red)', high: 'var(--orange)', medium: 'var(--yellow)', low: 'var(--text-dim)' };
+
+// ─── Toast + API ───────────────────────────────────────
+function showToast(msg, type = 'info') {
+  let container = document.querySelector('.toast-container');
+  if (!container) {
+    container = h('div', { className: 'toast-container' });
+    document.body.appendChild(container);
+  }
+  const toast = h('div', { className: `toast ${type}` }, msg);
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
+}
+
+async function callAction(taskId, action) {
+  try {
+    const res = await fetch('/api/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId, action }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast(data.message, 'success');
+    } else {
+      showToast(data.error || '操作失败', 'error');
+    }
+  } catch (e) {
+    showToast('网络错误', 'error');
+  }
+}
+
+async function restartServer() {
+  if (!confirm('确定要重启 MCP 服务器吗？\n\n重启期间看板会短暂断开连接。')) return;
+  try {
+    await fetch('/api/restart', { method: 'POST' });
+    showToast('🔄 正在重启，稍候自动刷新...', 'info');
+    // 等待服务器重启后自动刷新页面
+    setTimeout(() => {
+      const check = setInterval(async () => {
+        try {
+          const r = await fetch('/api/data');
+          if (r.ok) { clearInterval(check); location.reload(); }
+        } catch {}
+      }, 1000);
+    }, 2000);
+  } catch (e) {
+    showToast('重启请求失败', 'error');
+  }
+}
+
+async function callAutoAccept(action) {
+  try {
+    const res = await fetch('/api/auto-accept', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast(data.message, 'success');
+      if (data.status) { aaStatus = data.status; render(); }
+    } else {
+      showToast(data.message || '操作失败', 'error');
+    }
+  } catch (e) {
+    showToast('网络错误', 'error');
+  }
+}
+
+async function copyPrompt(taskId) {
+  try {
+    const res = await fetch(`/api/prompt/${taskId}`);
+    const data = await res.json();
+    if (data.prompt) {
+      await navigator.clipboard.writeText(data.prompt);
+      showToast(`✅ 提示词已复制: ${data.title}`, 'success');
+    } else {
+      showToast('生成失败', 'error');
+    }
+  } catch (e) {
+    showToast('复制失败', 'error');
+  }
+}
+
+// ─── Helpers ───────────────────────────────────────
+const h = (tag, attrs = {}, ...children) => {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'className') el.className = v;
+    else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(), v);
+    else el.setAttribute(k, v);
+  }
+  for (const c of children) {
+    if (c == null || c === false) continue;
+    el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+  }
+  return el;
+};
+
+const tag = (text, color = '') => h('span', { className: `tag${color ? ` tag-${color}` : ''}` }, text);
+
+// ─── Components ───────────────────────────────────────
+
+function renderStats(tasks) {
+  const counts = { todo: 0, 'in-progress': 0, review: 0, done: 0, blocked: 0 };
+  tasks.forEach(t => counts[t.status] = (counts[t.status] || 0) + 1);
+  const totalMin = tasks.reduce((s, t) => s + (t.estimatedMinutes || 0), 0);
+
+  const items = [
+    { label: '总任务', value: tasks.length, color: 'var(--blue)' },
+    { label: '待做', value: counts.todo, color: 'var(--blue)' },
+    { label: '进行中', value: counts['in-progress'], color: 'var(--orange)' },
+    { label: '待审核', value: counts.review, color: 'var(--yellow)' },
+    { label: '已完成', value: counts.done, color: 'var(--green)' },
+    { label: '阻塞', value: counts.blocked, color: 'var(--red)' },
+    { label: '总工时', value: (totalMin / 60).toFixed(1) + 'h', color: 'var(--purple)' },
+  ];
+
+  return h('div', { className: 'stats-grid' },
+    ...items.map(i => h('div', { className: 'stat-card' },
+      h('div', { className: 'stat-label' }, i.label),
+      h('div', { className: 'stat-value', style: { color: i.color } }, String(i.value)),
+    ))
+  );
+}
+
+function renderTaskCard(task) {
+  const isReview = task.status === 'review';
+  const card = h('div', { className: `task-card p-${task.priority}${isReview ? ' s-review' : ''}` },
+    h('div', { className: 'task-header' },
+      h('span', { className: 'task-title' }, task.title),
+      tag(STATUS_LABEL[task.status] || task.status, STATUS_COLOR[task.status]),
+    ),
+    h('div', { className: 'task-desc' }, task.description || '—'),
+  );
+
+  // Tags
+  const tagsEl = h('div', { className: 'task-tags' });
+  if (task.workspace) tagsEl.appendChild(tag(task.workspace, 'purple'));
+  (task.tags || []).forEach(t => tagsEl.appendChild(tag(t)));
+  if (task.actualMinutes) tagsEl.appendChild(tag(`实际${task.actualMinutes}min`));
+  if (tagsEl.children.length) card.appendChild(tagsEl);
+
+  // Blocked alert
+  if (task.status === 'blocked' && task.blockedBy) {
+    card.appendChild(h('div', { className: 'blocked-alert' },
+      `⛔ 被 ${task.blockedBy} 阻塞${task.blockedReason ? '：' + task.blockedReason : ''}`
+    ));
+  }
+
+  // Subtasks
+  if (task.subtasks && task.subtasks.length > 0) {
+    const done = task.subtasks.filter(s => s.done).length;
+    card.appendChild(h('div', { style: { marginTop: '8px', fontSize: '12px', color: 'var(--text-sec)' } },
+      `📝 ${done}/${task.subtasks.length} 子任务`
+    ));
+  }
+
+  // Progress
+  const pct = task.progress || 0;
+  card.appendChild(h('div', { className: 'progress-bar' },
+    h('div', { className: 'progress-fill', style: { width: pct + '%' } })
+  ));
+
+  // Footer
+  card.appendChild(h('div', { className: 'task-footer' },
+    h('span', {}, `⏱️ ${task.estimatedMinutes}min`),
+    h('span', { style: { color: PRIORITY_COLOR[task.priority] } }, `● ${task.priority}`),
+  ));
+
+  // Action buttons
+  const actions = h('div', { className: 'task-actions' });
+  if (task.status === 'todo') {
+    actions.appendChild(h('button', { className: 'action-btn primary', onClick: () => copyPrompt(task.id) }, '📋 复制提示词'));
+    actions.appendChild(h('button', { className: 'action-btn', onClick: () => callAction(task.id, 'start') }, '▶️ 开始'));
+  } else if (task.status === 'in-progress') {
+    actions.appendChild(h('button', { className: 'action-btn primary', onClick: () => copyPrompt(task.id) }, '📋 复制提示词'));
+  } else if (task.status === 'review') {
+    actions.appendChild(h('button', { className: 'action-btn success', onClick: () => callAction(task.id, 'approve') }, '✅ 确认完成'));
+    actions.appendChild(h('button', { className: 'action-btn danger', onClick: () => callAction(task.id, 'reject') }, '↩️ 退回重做'));
+  }
+  if (actions.children.length > 0) card.appendChild(actions);
+
+  return card;
+}
+
+function renderTasks(tasks) {
+  const workspaces = [...new Set(tasks.map(t => t.workspace).filter(Boolean))];
+
+  const filters = [
+    { key: 'all', label: `全部 (${tasks.length})` },
+    { key: 'todo', label: '待做' },
+    { key: 'in-progress', label: '进行中' },
+    { key: 'review', label: '待审核' },
+    { key: 'done', label: '已完成' },
+    { key: 'blocked', label: '阻塞' },
+    ...workspaces.map(ws => ({ key: `ws:${ws}`, label: `📂 ${ws}` })),
+  ];
+
+  const filterBar = h('div', { className: 'filter-bar' },
+    ...filters.map(f => {
+      const btn = h('button', {
+        className: `filter-btn${taskFilter === f.key ? ' active' : ''}`,
+        onClick: () => { taskFilter = f.key; render(); },
+      }, f.label);
+      return btn;
+    })
+  );
+
+  let filtered = tasks;
+  if (taskFilter.startsWith('ws:')) filtered = tasks.filter(t => t.workspace === taskFilter.slice(3));
+  else if (taskFilter !== 'all') filtered = tasks.filter(t => t.status === taskFilter);
+
+  const grid = h('div', { className: 'cards-grid' });
+  if (filtered.length === 0) {
+    grid.appendChild(h('div', { className: 'empty' }, h('div', { className: 'empty-icon' }, '📭'), '暂无任务'));
+  } else {
+    filtered.forEach(t => grid.appendChild(renderTaskCard(t)));
+  }
+
+  return h('div', {}, filterBar, grid);
+}
+
+function renderSchedule(schedule, tasks) {
+  if (!schedule || !schedule.slots || schedule.slots.length === 0) {
+    return h('div', { className: 'empty' }, h('div', { className: 'empty-icon' }, '📅'), '今日暂无安排');
+  }
+
+  const taskMap = new Map(tasks.map(t => [t.id, t]));
+  const wsGroups = {};
+  schedule.slots.forEach(s => {
+    const t = taskMap.get(s.taskId);
+    const ws = t?.workspace || '未分组';
+    if (!wsGroups[ws]) wsGroups[ws] = {};
+    if (!wsGroups[ws][s.batchIndex]) wsGroups[ws][s.batchIndex] = [];
+    wsGroups[ws][s.batchIndex].push({ ...s, task: t });
+  });
+
+  const container = h('div', {});
+
+  for (const [ws, batches] of Object.entries(wsGroups)) {
+    const group = h('div', { className: 'ws-group' },
+      h('div', { className: 'ws-group-header' }, `📂 ${ws}`),
+    );
+
+    for (const [bi, slots] of Object.entries(batches)) {
+      const maxMin = Math.max(...slots.map(s => s.estimatedMinutes));
+      group.appendChild(h('div', { className: 'batch-label' }, `第 ${parseInt(bi) + 1} 批次 · 约 ${maxMin} 分钟`));
+
+      slots.forEach((s, i) => {
+        const icon = s.status === 'done' ? '✅' : s.status === 'in-progress' ? '🔄' : '📋';
+        group.appendChild(h('div', { className: 'slot-row' },
+          h('span', { className: 'slot-num' }, `槽位 ${i + 1}`),
+          h('span', {}, icon),
+          h('span', { className: 'slot-title' }, s.taskTitle),
+          tag(`${s.estimatedMinutes}min`),
+          tag(STATUS_LABEL[s.status] || s.status, STATUS_COLOR[s.status]),
+        ));
+      });
+    }
+
+    container.appendChild(group);
+  }
+
+  // Total
+  container.appendChild(h('div', { className: 'stat-card', style: { marginTop: '16px' } },
+    h('div', { className: 'stat-label' }, '今日总工时'),
+    h('div', { className: 'stat-value', style: { color: 'var(--purple)', fontSize: '22px' } },
+      `${schedule.totalMinutes}min (${(schedule.totalMinutes / 60).toFixed(1)}h)`),
+  ));
+
+  return container;
+}
+
+function renderBlocked(tasks) {
+  const blocked = tasks.filter(t => t.status === 'blocked');
+  if (blocked.length === 0) {
+    return h('div', { className: 'empty' }, h('div', { className: 'empty-icon' }, '🎉'), '没有阻塞项');
+  }
+
+  const container = h('div', {});
+  blocked.forEach(t => {
+    const dur = t.blockedAt ? Math.round((Date.now() - new Date(t.blockedAt).getTime()) / 3600000) : 0;
+    const card = h('div', { className: 'blocked-card' },
+      h('div', { className: 'info' },
+        h('div', { className: 'title' }, `⛔ ${t.title}`),
+        h('div', { className: 'reason' },
+          (t.blockedBy ? `阻塞人: ${t.blockedBy}` : '') +
+          (t.blockedReason ? ` · 原因: ${t.blockedReason}` : '')
+        ),
+      ),
+    );
+    if (dur > 0) card.appendChild(tag(`已阻塞 ${dur}h`, 'red'));
+    container.appendChild(card);
+  });
+  return container;
+}
+
+// ─── Week Plan ───────────────────────────────────────
+const DAY_NAMES = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+function renderWeekPlan(weekPlan, weekSchedules, weekDates, tasks) {
+  const container = h('div', {});
+  const taskMap = new Map(tasks.map(t => [t.id, t]));
+  const today = new Date().toISOString().slice(0, 10);
+
+  // ── Header: Week label + Goals ──
+  const header = h('div', { className: 'week-header' });
+
+  if (weekPlan) {
+    header.appendChild(h('div', { className: 'week-title' }, `📅 ${weekPlan.weekLabel}`));
+
+    // Goals
+    if (weekPlan.goals && weekPlan.goals.length > 0) {
+      const goalList = h('ul', { className: 'week-goals' });
+      weekPlan.goals.forEach(g => goalList.appendChild(h('li', {}, g)));
+      header.appendChild(goalList);
+    }
+
+    // Overall progress
+    const relatedTasks = (weekPlan.taskIds || []).map(id => taskMap.get(id)).filter(Boolean);
+    const totalMin = relatedTasks.reduce((s, t) => s + (t.estimatedMinutes || 0), 0);
+    const doneMin = relatedTasks.filter(t => t.status === 'done').reduce((s, t) => s + (t.estimatedMinutes || 0), 0);
+    const pct = totalMin > 0 ? Math.round(doneMin / totalMin * 100) : 0;
+
+    header.appendChild(h('div', { className: 'week-progress-bar' },
+      h('div', { className: 'week-progress-fill', style: { width: pct + '%' } })
+    ));
+    header.appendChild(h('div', { className: 'week-progress-text' },
+      h('span', {}, `完成 ${pct}%`),
+      h('span', {}, `${(doneMin / 60).toFixed(1)}h / ${(totalMin / 60).toFixed(1)}h`),
+    ));
+
+    // Task status summary
+    const counts = { todo: 0, 'in-progress': 0, done: 0, blocked: 0 };
+    relatedTasks.forEach(t => counts[t.status] = (counts[t.status] || 0) + 1);
+    const statusBar = h('div', { style: { display: 'flex', gap: '12px', marginTop: '12px', flexWrap: 'wrap' } },
+      tag(`✅ ${counts.done} 完成`, 'green'),
+      tag(`🔄 ${counts['in-progress']} 进行中`, 'orange'),
+      tag(`📋 ${counts.todo} 待做`, 'blue'),
+      counts.blocked > 0 ? tag(`⛔ ${counts.blocked} 阻塞`, 'red') : null,
+    );
+    header.appendChild(statusBar);
+
+    if (weekPlan.notes) {
+      header.appendChild(h('div', { style: { marginTop: '12px', fontSize: '13px', color: 'var(--text-sec)' } },
+        `📝 ${weekPlan.notes}`
+      ));
+    }
+  } else {
+    header.appendChild(h('div', { className: 'week-title' }, '📅 本周计划'));
+    header.appendChild(h('div', { style: { color: 'var(--text-sec)', fontSize: '14px' } },
+      '尚未创建周计划，在对话中使用 plan_week_create 或 plan_quick_start 创建'
+    ));
+  }
+  container.appendChild(header);
+
+  // ── Day Cards Grid ──
+  container.appendChild(h('div', { className: 'section-title' }, '📆 每日安排'));
+  const daysGrid = h('div', { className: 'week-days' });
+
+  (weekDates || []).forEach((date, idx) => {
+    const isToday = date === today;
+    const isPast = date < today;
+    const sched = weekSchedules?.[date];
+    const dayName = DAY_NAMES[idx] || '';
+    const dateShort = date.slice(5); // MM-DD
+
+    const card = h('div', { className: `day-card${isToday ? ' is-today' : ''}` });
+
+    // Header
+    const totalMin = sched?.totalMinutes || 0;
+    const headerEl = h('div', { className: 'day-card-header' },
+      h('span', {}, `${dayName} ${dateShort}`),
+      totalMin > 0 ? h('span', { style: { fontSize: '11px', fontWeight: 400, color: 'var(--text-sec)' } }, `${(totalMin / 60).toFixed(1)}h`) : null,
+    );
+    if (isToday) {
+      headerEl.appendChild(h('span', { style: { fontSize: '10px', background: 'var(--primary)', color: '#fff', padding: '1px 6px', borderRadius: '8px', marginLeft: '4px' } }, '今天'));
+    }
+    card.appendChild(headerEl);
+
+    // Body: task list
+    const body = h('div', { className: 'day-card-body' });
+    if (sched && sched.slots && sched.slots.length > 0) {
+      // Deduplicate task names, show status
+      const seen = new Set();
+      sched.slots.forEach(s => {
+        if (seen.has(s.taskId)) return;
+        seen.add(s.taskId);
+        const t = taskMap.get(s.taskId);
+        const status = t?.status || s.status;
+        const icon = status === 'done' ? '✅' : status === 'in-progress' ? '🔄' : isPast ? '⏭️' : '📋';
+        body.appendChild(h('div', { className: 'day-task' },
+          h('span', { className: 'day-task-icon' }, icon),
+          h('span', { className: 'day-task-name', title: s.taskTitle }, s.taskTitle),
+        ));
+      });
+    } else {
+      body.appendChild(h('div', { className: 'day-empty' }, isPast ? '—' : '暂无安排'));
+    }
+    card.appendChild(body);
+    daysGrid.appendChild(card);
+  });
+
+  container.appendChild(daysGrid);
+
+  // ── Task list with status ──
+  if (weekPlan && weekPlan.taskIds && weekPlan.taskIds.length > 0) {
+    container.appendChild(h('div', { className: 'section-title', style: { marginTop: '28px' } }, '📋 本周任务'));
+    const taskList = h('div', { className: 'week-task-list' });
+
+    const relatedTasks = weekPlan.taskIds.map(id => taskMap.get(id)).filter(Boolean);
+    // Sort: in-progress first, then todo, then blocked, then done
+    const order = { 'in-progress': 0, todo: 1, blocked: 2, done: 3 };
+    relatedTasks.sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
+
+    relatedTasks.forEach(t => {
+      const pct = t.progress || 0;
+      const row = h('div', { className: 'week-task-row' },
+        tag(STATUS_LABEL[t.status] || t.status, STATUS_COLOR[t.status]),
+        h('span', { style: { flex: 1, fontWeight: 500 } }, t.title),
+        t.workspace ? tag(t.workspace, 'purple') : null,
+        h('span', { style: { fontSize: '12px', color: 'var(--text-sec)', minWidth: '50px', textAlign: 'right' } }, `${t.estimatedMinutes}min`),
+        h('span', { style: { fontSize: '12px', color: PRIORITY_COLOR[t.priority], minWidth: '20px' } }, `● ${t.priority}`),
+      );
+      // Mini progress bar
+      if (pct > 0 && t.status !== 'done') {
+        row.appendChild(h('div', { style: { width: '60px', height: '4px', background: 'var(--border)', borderRadius: '2px', overflow: 'hidden' } },
+          h('div', { style: { width: pct + '%', height: '100%', background: 'var(--primary)', borderRadius: '2px' } })
+        ));
+      }
+      taskList.appendChild(row);
+    });
+
+    container.appendChild(taskList);
+  }
+
+  return container;
+}
+
+// ─── Notifications ───────────────────────────────────────
+function renderNotifications(tasks) {
+  const notifications = [];
+
+  // 1. 待审核任务
+  const reviewTasks = tasks.filter(t => t.status === 'review');
+  reviewTasks.forEach(t => {
+    notifications.push({
+      type: 'review', icon: '🔔',
+      text: `任务 "${t.title}" 已完成，等待审核`,
+      sub: t.actualMinutes ? `实际耗时 ${t.actualMinutes}min（预估 ${t.estimatedMinutes}min）` : '',
+      actions: [
+        { label: '✅ 确认', cls: 'success', fn: () => callAction(t.id, 'approve') },
+        { label: '↩️ 退回', cls: 'danger', fn: () => callAction(t.id, 'reject') },
+      ],
+    });
+  });
+
+  // 2. 长时间阻塞 (>2h)
+  const longBlocked = tasks.filter(t => {
+    if (t.status !== 'blocked' || !t.blockedAt) return false;
+    return (Date.now() - new Date(t.blockedAt).getTime()) > 2 * 3600000;
+  });
+  longBlocked.forEach(t => {
+    const hours = Math.round((Date.now() - new Date(t.blockedAt).getTime()) / 3600000);
+    notifications.push({
+      type: 'blocked', icon: '⛔',
+      text: `"${t.title}" 已阻塞 ${hours} 小时`,
+      sub: t.blockedBy ? `阻塞方: ${t.blockedBy}` : '',
+      actions: [],
+    });
+  });
+
+  // 3. 无进行中任务
+  const inProgress = tasks.filter(t => t.status === 'in-progress');
+  const todoReady = tasks.filter(t => t.status === 'todo');
+  if (inProgress.length === 0 && todoReady.length > 0) {
+    notifications.push({
+      type: 'idle', icon: '💤',
+      text: `没有进行中的任务，${todoReady.length} 个待分配`,
+      sub: '',
+      actions: [],
+    });
+  }
+
+  // 4. 高优先级就绪
+  const doneIds = new Set(tasks.filter(t => t.status === 'done' || t.status === 'review').map(t => t.id));
+  const urgentReady = tasks.filter(t =>
+    t.status === 'todo' &&
+    (t.priority === 'urgent' || t.priority === 'high') &&
+    t.dependsOn.every(d => doneIds.has(d))
+  );
+  urgentReady.forEach(t => {
+    notifications.push({
+      type: 'ready', icon: '🔥',
+      text: `高优先级 "${t.title}" 已就绪`,
+      sub: `${t.priority} · ${t.estimatedMinutes}min`,
+      actions: [
+        { label: '📋 复制提示词', cls: 'primary', fn: () => copyPrompt(t.id) },
+        { label: '▶️ 开始', cls: '', fn: () => callAction(t.id, 'start') },
+      ],
+    });
+  });
+
+  if (notifications.length === 0) return null;
+
+  const area = h('div', { className: 'notify-area' });
+  area.appendChild(h('div', { className: 'section-title' }, `🔔 需要你关注 (${notifications.length})`));
+
+  notifications.forEach(n => {
+    const item = h('div', { className: `notify-item type-${n.type}` },
+      h('span', { className: 'notify-icon' }, n.icon),
+      h('div', { className: 'notify-text' },
+        h('div', {}, n.text),
+        n.sub ? h('div', { className: 'sub' }, n.sub) : null,
+      ),
+    );
+    if (n.actions.length > 0) {
+      const actionsEl = h('div', { className: 'notify-actions' });
+      n.actions.forEach(a => {
+        actionsEl.appendChild(h('button', {
+          className: `action-btn ${a.cls}`, onClick: a.fn,
+        }, a.label));
+      });
+      item.appendChild(actionsEl);
+    }
+    area.appendChild(item);
+  });
+
+  return area;
+}
+
+// ─── Render ───────────────────────────────────────
+function render() {
+  const root = document.getElementById('tabContent');
+  root.innerHTML = '';
+
+  const { tasks, schedule, weekPlan, weekSchedules, weekDates } = state;
+
+  switch (activeTab) {
+    case 'overview':
+      const notifs = renderNotifications(tasks);
+      if (notifs) root.appendChild(notifs);
+      root.appendChild(renderStats(tasks));
+      root.appendChild(renderSessions());
+      root.appendChild(h('div', { className: 'section-title' }, '📌 今日安排'));
+      root.appendChild(renderSchedule(schedule, tasks));
+      root.appendChild(h('hr', { className: 'divider' }));
+      root.appendChild(h('div', { className: 'section-title' }, '⛔ 阻塞项'));
+      root.appendChild(renderBlocked(tasks));
+      break;
+    case 'week':
+      root.appendChild(renderWeekPlan(weekPlan, weekSchedules, weekDates, tasks));
+      break;
+    case 'tasks':
+      root.appendChild(renderTasks(tasks));
+      break;
+    case 'schedule':
+      root.appendChild(renderSchedule(schedule, tasks));
+      break;
+    case 'blocked':
+      root.appendChild(renderBlocked(tasks));
+      break;
+    case 'logs':
+      root.appendChild(renderLogs());
+      break;
+  }
+}
+
+// ─── Tab Switching ───────────────────────────────────────
+function switchTab(tabName) {
+  document.querySelectorAll('#mainTabs .tab').forEach(t => t.classList.remove('active'));
+  const targetBtn = document.querySelector(`#mainTabs .tab[data-tab="${tabName}"]`);
+  if (targetBtn) targetBtn.classList.add('active');
+  activeTab = tabName;
+  location.hash = tabName;
+  taskFilter = 'all';
+  render();
+}
+
+document.getElementById('mainTabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('.tab');
+  if (!btn) return;
+  switchTab(btn.dataset.tab);
+});
+
+// 页面加载时根据 hash 激活对应的 tab 按钮
+if (activeTab !== 'overview') {
+  document.querySelectorAll('#mainTabs .tab').forEach(t => t.classList.remove('active'));
+  const initBtn = document.querySelector(`#mainTabs .tab[data-tab="${activeTab}"]`);
+  if (initBtn) initBtn.classList.add('active');
+}
+
+// ─── Data Fetching + SSE ───────────────────────────────────────
+function getWeekDatesLocal() {
+  const d = new Date();
+  const dayNum = d.getDay() || 7;
+  const monday = new Date(d);
+  monday.setDate(d.getDate() - dayNum + 1);
+  monday.setHours(12, 0, 0, 0); // 避免 DST 问题
+  const dates = [];
+  for (let i = 0; i < 7; i++) {
+    const dd = new Date(monday);
+    dd.setDate(monday.getDate() + i);
+    // 用本地日期格式避免 UTC/本地时区混淆
+    const y = dd.getFullYear();
+    const m = String(dd.getMonth() + 1).padStart(2, '0');
+    const day = String(dd.getDate()).padStart(2, '0');
+    dates.push(`${y}-${m}-${day}`);
+  }
+  return dates;
+}
+
+function updateData(data) {
+  // Fallback: 如果后端没有返回 weekDates，前端自己计算
+  if (!data.weekDates || data.weekDates.length === 0) {
+    data.weekDates = getWeekDatesLocal();
+  }
+  // Fallback: 如果没有 weekSchedules，用 schedule 凑出今日的
+  if (!data.weekSchedules || Object.keys(data.weekSchedules).length === 0) {
+    const today = new Date().toISOString().slice(0, 10);
+    data.weekSchedules = {};
+    if (data.schedule) {
+      data.weekSchedules[today] = data.schedule;
+    }
+  }
+  state = data;
+  document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+  render();
+}
+
+// ─── Log Rendering ───────────────────────────────────────
+function renderLogs() {
+  const panel = h('div', { className: 'log-panel' });
+
+  // Header with status and controls
+  const actions = h('div', { className: 'log-actions' });
+
+  // Status indicator
+  const statusDot = h('span', {
+    style: {
+      width: '8px', height: '8px', borderRadius: '50%', display: 'inline-block',
+      background: aaStatus.running ? 'var(--green)' : 'var(--red)',
+      animation: aaStatus.running ? 'pulse 2s ease-in-out infinite' : 'none',
+    },
+  });
+  const statusText = h('span', {
+    style: { fontSize: '13px', color: aaStatus.running ? 'var(--green)' : 'var(--text-sec)' },
+  }, aaStatus.running ? `运行中 (PID: ${aaStatus.pid})` : '已停止');
+
+  // Control buttons
+  if (aaStatus.running) {
+    actions.appendChild(h('button', { onClick: () => callAutoAccept('restart') }, '🔄 重启'));
+    actions.appendChild(h('button', { onClick: () => callAutoAccept('stop'), style: { borderColor: 'rgba(255,77,79,0.4)', color: 'var(--red)' } }, '⏹️ 停止'));
+  } else {
+    actions.appendChild(h('button', { onClick: () => callAutoAccept('start'), style: { borderColor: 'rgba(82,196,26,0.4)', color: 'var(--green)' } }, '▶️ 启动'));
+  }
+
+  // Log actions
+  if (logEntries.length > 0) {
+    actions.appendChild(h('button', {
+      onClick: () => { logAutoScroll = !logAutoScroll; render(); },
+    }, logAutoScroll ? '⏸️ 暂停滚动' : '⬇️ 自动滚动'));
+    actions.appendChild(h('button', {
+      onClick: () => { logEntries = []; render(); },
+    }, '🗑️ 清空'));
+  }
+
+  panel.appendChild(h('div', { className: 'log-header' },
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+      h('span', { className: 'log-title' }, '🤖 Auto-Accept'),
+      statusDot,
+      statusText,
+    ),
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
+      logEntries.length > 0 ? h('span', { className: 'log-count' }, `${logEntries.length} 条`) : null,
+      actions,
+    ),
+  ));
+
+  // Body
+  const body = h('div', { className: 'log-body', id: 'logBody' });
+  logEntries.forEach(entry => {
+    const timeStr = new Date(entry.time).toLocaleTimeString();
+    body.appendChild(h('div', { className: `log-line type-${entry.type}` },
+      h('span', { className: 'log-time' }, timeStr),
+      h('span', { className: 'log-text' }, entry.text),
+    ));
+  });
+  panel.appendChild(body);
+
+  // Auto scroll to bottom after render
+  if (logAutoScroll) {
+    requestAnimationFrame(() => {
+      const el = document.getElementById('logBody');
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+  }
+
+  return panel;
+}
+
+function renderSessions() {
+  const container = h('div', {});
+  container.appendChild(h('div', { className: 'section-title' }, `🖥️ 活跃会话 (${sessions.length})`));
+
+  if (sessions.length === 0) {
+    container.appendChild(h('div', { className: 'session-empty' }, '暂无活跃的 AI 会话 — 开始任务后 AI 会自动报告状态'));
+    return container;
+  }
+
+  const grid = h('div', { className: 'sessions-grid' });
+  const now = Date.now();
+
+  sessions.forEach(s => {
+    const lastSeenMs = now - new Date(s.lastSeen).getTime();
+    const isIdle = s.status === 'working' && lastSeenMs > 5 * 60 * 1000; // 5分钟无活动视为空闲
+    const displayStatus = isIdle ? 'idle' : s.status;
+
+    const durationMs = now - new Date(s.startedAt).getTime();
+    const durationMin = Math.round(durationMs / 60000);
+    const durationStr = durationMin < 60 ? `${durationMin}分钟` : `${(durationMin / 60).toFixed(1)}小时`;
+
+    const lastSeenStr = lastSeenMs < 60000 ? '刚刚' : lastSeenMs < 300000 ? `${Math.round(lastSeenMs / 60000)}分钟前` : `${Math.round(lastSeenMs / 60000)}分钟前 ⚠️`;
+
+    const card = h('div', { className: `session-card s-${displayStatus}` },
+      h('div', { className: 'session-top' },
+        h('span', { className: `session-dot ${displayStatus}` }),
+        h('span', { className: 'session-name' }, s.name),
+        h('span', {
+          style: { fontSize: '11px', color: displayStatus === 'idle' ? 'var(--yellow)' : 'var(--green)', fontWeight: 500 }
+        }, displayStatus === 'idle' ? '空闲' : '工作中'),
+      ),
+      h('div', { className: 'session-meta' },
+        s.taskTitle ? h('span', {}, `📋 ${s.taskTitle}`) : null,
+        s.description ? h('span', {}, `📝 ${s.description}`) : null,
+        h('span', {}, `⏱️ 已工作 ${durationStr} · 最后活跃 ${lastSeenStr}`),
+      ),
+    );
+    grid.appendChild(card);
+  });
+
+  container.appendChild(grid);
+  return container;
+}
+
+// Initial render
+render();
+
+// ─── Data Fetching + SSE ───────────────────────────────────────
+fetch('/api/data').then(r => r.json()).then(updateData).catch(() => {});
+fetch('/api/logs').then(r => r.json()).then(logs => {
+  if (Array.isArray(logs)) { logEntries = logs; if (activeTab === 'logs') render(); }
+}).catch(() => {});
+
+const sse = new EventSource('/api/events');
+sse.addEventListener('update', (e) => {
+  try { updateData(JSON.parse(e.data)); } catch {}
+});
+sse.addEventListener('log', (e) => {
+  try {
+    const entry = JSON.parse(e.data);
+    logEntries.push(entry);
+    if (logEntries.length > 200) logEntries.splice(0, logEntries.length - 200);
+    if (activeTab === 'logs') render();
+  } catch {}
+});
+sse.addEventListener('aa-status', (e) => {
+  try {
+    aaStatus = JSON.parse(e.data);
+    if (activeTab === 'logs') render();
+  } catch {}
+});
+
+// Fetch initial Auto-Accept status
+fetch('/api/auto-accept').then(r => r.json()).then(s => {
+  aaStatus = s;
+  if (activeTab === 'logs') render();
+}).catch(() => {});
+
+// Fetch initial sessions
+fetch('/api/sessions').then(r => r.json()).then(s => {
+  sessions = s;
+  if (activeTab === 'overview') render();
+}).catch(() => {});
+
+// SSE: session updates
+sse.addEventListener('sessions', (e) => {
+  try {
+    sessions = JSON.parse(e.data);
+    if (activeTab === 'overview') render();
+  } catch {}
+});
+</script>
+</body>
+</html>

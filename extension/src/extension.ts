@@ -4,15 +4,21 @@ import { Logger } from './logger';
 import { StatusBarManager } from './statusbar';
 import { AutoAcceptor } from './auto-acceptor';
 import { AgentUI } from './agent-ui';
+import { EventBus } from './event-bus';
+import { CDPRenamer } from './cdp-renamer';
+import { McpManager } from './mcp-manager';
+import { DashboardViewProvider } from './webview-provider';
 
 /**
  * Antigravity Auto-Accept Extension
  *
- * 通过 antigravity-sdk 原生 API 自动接受 Agent 操作，
- * 替代原 CDP 外部脚本方案。
+ * 方案 C：SDK 信号驱动 + CDP 短连接执行
+ * - SDK Monitor 监听 Agent 活动，作为信号源
+ * - CDP 短连接扫描 DOM 并点击按钮，作为执行引擎
  */
 
 let acceptor: AutoAcceptor | undefined;
+let mcpManager: McpManager | undefined;
 
 export async function activate(context: vscode.ExtensionContext) {
     const logger = new Logger();
@@ -23,20 +29,17 @@ export async function activate(context: vscode.ExtensionContext) {
 
     logger.info('Auto Accept 插件加载中...');
 
-    // ---- 初始化 antigravity-sdk ----
+    // ---- 初始化 antigravity-sdk（可选，作为信号源） ----
     let sdk: any;
     try {
         const { AntigravitySDK } = require('antigravity-sdk');
         sdk = new AntigravitySDK(context);
         await sdk.initialize();
-        logger.info('✅ antigravity-sdk 初始化成功');
+        logger.info('✅ antigravity-sdk 初始化成功（信号源就绪）');
     } catch (err: any) {
-        logger.error(`antigravity-sdk 初始化失败: ${err.message}`);
-        logger.info('💡 请确认已安装 antigravity-sdk: npm install antigravity-sdk');
-        logger.info('💡 将以有限功能模式运行（仅 UI，不能自动接受）');
-
-        // 创建一个 stub SDK 以便 UI 功能照常工作
-        sdk = createStubSdk(logger);
+        logger.info(`⚠️ antigravity-sdk 不可用: ${err.message}`);
+        logger.info('📡 将仅依赖 CDP 保底扫描（无 SDK 信号加速）');
+        sdk = createStubSdk();
     }
 
     // ---- 创建状态栏 ----
@@ -45,8 +48,28 @@ export async function activate(context: vscode.ExtensionContext) {
     // ---- 创建 Agent View UI 集成 ----
     const agentUI = new AgentUI(sdk, logger);
 
-    // ---- 创建自动接受器（内含 AutoRetry） ----
-    acceptor = new AutoAcceptor(sdk, config, logger, statusBar, agentUI);
+    // ---- 创建事件总线 + 重命名器 ----
+    const eventBus = new EventBus();
+    const storagePath = context.globalStorageUri.fsPath;
+    const renamer = new CDPRenamer(storagePath, logger);
+
+    // ---- 创建自动接受器 ----
+    acceptor = new AutoAcceptor(sdk, config, logger, statusBar, agentUI, eventBus, renamer);
+
+    // ---- 注册 WebView Dashboard ----
+    const dashboardProvider = new DashboardViewProvider(context.extensionUri, eventBus);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(
+            DashboardViewProvider.viewType,
+            dashboardProvider,
+        ),
+    );
+
+    // ---- MCP Server 管理（异步启动，失败不阻塞） ----
+    mcpManager = new McpManager(context.extensionPath, logger);
+    mcpManager.start().catch((e: any) => {
+        logger.info(`[MCP] 启动失败（非致命）: ${e.message}`);
+    });
 
     // ---- 注册命令 ----
     context.subscriptions.push(
@@ -64,13 +87,14 @@ export async function activate(context: vscode.ExtensionContext) {
         }),
 
         vscode.commands.registerCommand('autoAccept.exploreApi', () => {
-            exploreAntigravityApi(sdk, logger);
+            exploreApi(acceptor!, sdk, logger);
         }),
 
         config,
         statusBar,
         acceptor,
         logger,
+        { dispose: () => mcpManager?.stop() },
     );
 
     // ---- 自动启动 ----
@@ -90,159 +114,83 @@ export async function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
     acceptor?.stop();
+    mcpManager?.stop();
 }
 
 /**
- * API 探索命令 — 列出 Antigravity 提供的所有可用 API
- *
- * 通过 "Auto Accept: Explore Antigravity API (Debug)" 命令触发。
+ * API 探索 + CDP 诊断命令
  */
-async function exploreAntigravityApi(sdk: any, logger: Logger) {
+async function exploreApi(acceptor: AutoAcceptor, sdk: any, logger: Logger) {
     logger.show();
     logger.info('');
     logger.info('========================================');
-    logger.info('  Antigravity API 探索');
+    logger.info('  Auto Accept 诊断');
     logger.info('========================================');
 
-    // 1. 列出所有 VS Code 命令
-    try {
-        const allCommands = await vscode.commands.getCommands(true);
-        const relevantCommands = allCommands.filter((c: string) =>
-            c.toLowerCase().includes('antigravity') ||
-            c.toLowerCase().includes('cascade') ||
-            c.toLowerCase().includes('agent') ||
-            c.toLowerCase().includes('windsurf') ||
-            c.toLowerCase().includes('codeium') ||
-            c.toLowerCase().includes('copilot'),
-        );
+    // CDP 状态
+    logger.info('');
+    logger.info('--- CDP 状态 ---');
+    const cdpMgr = acceptor.cdpManager;
+    logger.info(`  已连接: ${cdpMgr.connected ? '是' : '否'}`);
+    logger.info(`  Target 数: ${cdpMgr.targetCount}`);
 
-        logger.info('');
-        logger.info(`📋 IDE 全部命令数量: ${allCommands.length}`);
-        logger.info(`📋 相关命令 (${relevantCommands.length} 个):`);
-        for (const cmd of relevantCommands.sort()) {
-            logger.info(`   - ${cmd}`);
-        }
-    } catch (err: any) {
-        logger.error(`列出命令失败: ${err.message}`);
-    }
+    // 手动触发一次扫描
+    logger.info('');
+    logger.info('--- 手动触发 CDP 扫描 ---');
+    const clicked = await cdpMgr.scan('manual-diagnostic');
+    logger.info(`  点击了 ${clicked} 个按钮`);
 
-    // 2. 测试 SDK 核心 API
+    // SDK 状态
     logger.info('');
     logger.info('--- SDK API 测试 ---');
 
-    // 2a. 获取会话列表
     try {
         const sessions = await sdk.cascade.getSessions();
-        logger.info(`✅ sdk.cascade.getSessions(): 返回 ${sessions?.length ?? 0} 个会话`);
-        if (sessions?.length > 0) {
-            for (const s of sessions.slice(0, 5)) {
-                logger.info(`   📝 ${s.title || s.id} (steps: ${s.stepCount ?? '?'})`);
-            }
-            if (sessions.length > 5) {
-                logger.info(`   ... 还有 ${sessions.length - 5} 个会话`);
-            }
-        }
+        logger.info(`  ✅ getSessions(): ${sessions?.length ?? 0} 个会话`);
     } catch (err: any) {
-        logger.error(`❌ sdk.cascade.getSessions() 失败: ${err.message}`);
+        logger.info(`  ❌ getSessions(): ${err.message}`);
     }
 
-    // 2b. 获取偏好设置
-    try {
-        const prefs = await sdk.cascade.getPreferences();
-        logger.info(`✅ sdk.cascade.getPreferences():`);
-        if (prefs) {
-            const keys = Object.keys(prefs);
-            for (const key of keys) {
-                logger.info(`   ${key}: ${JSON.stringify(prefs[key])}`);
-            }
-        }
-    } catch (err: any) {
-        logger.error(`❌ sdk.cascade.getPreferences() 失败: ${err.message}`);
-    }
-
-    // 2c. 测试诊断信息
-    try {
-        const diag = await sdk.cascade.getDiagnostics();
-        logger.info(`✅ sdk.cascade.getDiagnostics():`);
-        if (diag?.systemInfo) {
-            logger.info(`   OS: ${diag.systemInfo.operatingSystem}`);
-            logger.info(`   User: ${diag.systemInfo.userName}`);
-        }
-    } catch (err: any) {
-        logger.error(`❌ sdk.cascade.getDiagnostics() 失败: ${err.message}`);
-    }
-
-    // 2d. 测试 LSBridge
-    try {
-        const port = await sdk.cascade.getBrowserPort();
-        logger.info(`✅ sdk.cascade.getBrowserPort(): ${port}`);
-    } catch (err: any) {
-        logger.error(`❌ sdk.cascade.getBrowserPort() 失败: ${err.message}`);
-    }
-
-    // 2e. 列出 LSBridge 可用方法
-    if (sdk.ls) {
-        try {
-            const cascades = await sdk.ls.listCascades();
-            logger.info(`✅ sdk.ls.listCascades(): 返回 ${cascades?.length ?? 0} 个`);
-        } catch (err: any) {
-            logger.error(`❌ sdk.ls.listCascades() 失败: ${err.message}`);
-        }
-
-        try {
-            const status = await sdk.ls.getUserStatus();
-            logger.info(`✅ sdk.ls.getUserStatus(): ${JSON.stringify(status)}`);
-        } catch (err: any) {
-            logger.error(`❌ sdk.ls.getUserStatus() 失败: ${err.message}`);
-        }
-    } else {
-        logger.info('⚠️ sdk.ls (LSBridge) 不可用');
-    }
-
-    // 2f. 测试 monitor 是否可用
-    try {
-        logger.info('');
-        logger.info('--- Monitor 事件注册测试 ---');
-        logger.info('✅ sdk.monitor.onStepCountChanged: ' + (typeof sdk.monitor.onStepCountChanged));
-        logger.info('✅ sdk.monitor.onActiveSessionChanged: ' + (typeof sdk.monitor.onActiveSessionChanged));
-        logger.info('✅ sdk.monitor.onNewConversation: ' + (typeof sdk.monitor.onNewConversation));
-        logger.info('✅ sdk.monitor.onStateChanged: ' + (typeof sdk.monitor.onStateChanged));
-        logger.info('✅ sdk.monitor.start: ' + (typeof sdk.monitor.start));
-    } catch (err: any) {
-        logger.error(`Monitor 检查失败: ${err.message}`);
-    }
-
-    // 2g. 测试 step control
+    // Monitor 可用性
     logger.info('');
-    logger.info('--- Step Control API 可用性 ---');
-    const stepMethods = [
-        'acceptStep', 'rejectStep',
-        'acceptTerminalCommand', 'rejectTerminalCommand',
-        'runTerminalCommand', 'acceptCommand',
-    ];
-    for (const method of stepMethods) {
-        const available = typeof sdk.cascade[method] === 'function';
-        logger.info(`${available ? '✅' : '❌'} sdk.cascade.${method}: ${available ? 'function' : 'not found'}`);
+    logger.info('--- Monitor 事件 ---');
+    logger.info(`  onStepCountChanged: ${typeof sdk.monitor.onStepCountChanged}`);
+    logger.info(`  onStateChanged: ${typeof sdk.monitor.onStateChanged}`);
+    logger.info(`  onNewConversation: ${typeof sdk.monitor.onNewConversation}`);
+    logger.info(`  onActiveSessionChanged: ${typeof sdk.monitor.onActiveSessionChanged}`);
+
+    // VS Code 命令
+    logger.info('');
+    logger.info('--- 相关 VS Code 命令 ---');
+    try {
+        const allCommands = await vscode.commands.getCommands(true);
+        const relevant = allCommands.filter((c: string) =>
+            c.toLowerCase().includes('antigravity') ||
+            c.toLowerCase().includes('agent'),
+        );
+        logger.info(`  共 ${relevant.length} 个相关命令`);
+        for (const cmd of relevant.sort()) {
+            logger.info(`   - ${cmd}`);
+        }
+    } catch (err: any) {
+        logger.info(`  ❌ 获取命令列表失败: ${err.message}`);
     }
 
     logger.info('');
     logger.info('========================================');
-    logger.info('  探索完毕');
+    logger.info('  诊断完毕');
     logger.info('========================================');
 
     vscode.window.showInformationMessage(
-        'API 探索完毕，请查看 Output 面板 → "Auto Accept" 频道',
+        '诊断完毕，请查看 Output 面板 → "Auto Accept" 频道',
     );
 }
 
 /**
- * 当 antigravity-sdk 不可用时的 Stub SDK
+ * SDK Stub（当 antigravity-sdk 不可用时）
  */
-function createStubSdk(logger: Logger) {
-    const noop = async () => {
-        logger.debug('Stub SDK: 操作跳过（SDK 未初始化）');
-    };
-
+function createStubSdk() {
+    const noop = async () => {};
     const noopSync = () => {};
 
     return {

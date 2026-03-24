@@ -2,7 +2,7 @@
   "name": "antigravity-auto-accept",
   "displayName": "Auto Accept",
   "description": "自动接受 Antigravity Agent 的操作确认（代码编辑、终端命令等）",
-  "version": "1.1.0",
+  "version": "2.1.0",
   "publisher": "lzl",
   "repository": {
     "type": "git",
@@ -37,6 +37,24 @@
         "title": "Auto Accept: Reset Count"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "autoAcceptContainer",
+          "title": "Auto Accept",
+          "icon": "$(robot)"
+        }
+      ]
+    },
+    "views": {
+      "autoAcceptContainer": [
+        {
+          "type": "webview",
+          "id": "autoAccept.dashboard",
+          "name": "Dashboard"
+        }
+      ]
+    },
     "keybindings": [
       {
         "command": "autoAccept.toggle",
@@ -91,12 +109,40 @@
           "maximum": 10,
           "description": "最大重试次数"
         },
+        "autoAccept.cdpPort": {
+          "type": "number",
+          "default": 9222,
+          "description": "CDP 调试端口，与 IDE 启动参数 --remote-debugging-port 一致"
+        },
+        "autoAccept.buttonTexts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Run",
+            "Allow This Conversation",
+            "Always Allow",
+            "Allow Once",
+            "Accept all",
+            "Accept"
+          ],
+          "description": "自动点击的按钮文本白名单（顺序 = 优先级）"
+        },
+        "autoAccept.autoRetry.retryButtonTexts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": ["Retry"],
+          "description": "Retry 按钮文本（由 Smart Retry 专门处理）"
+        },
         "autoAccept.monitorPollInterval": {
           "type": "number",
           "default": 3000,
           "minimum": 1000,
           "maximum": 30000,
-          "description": "事件监听轮询间隔（毫秒）。通常使用事件驱动模式，此参数为降级轮询时的间隔。"
+          "description": "SDK 事件监听轮询间隔（毫秒），作为信号源触发 CDP 扫描"
         },
         "autoAccept.logLevel": {
           "type": "string",
@@ -126,6 +172,9 @@
     "@vscode/vsce": "^2.22.0"
   },
   "dependencies": {
-    "antigravity-sdk": "latest"
+    "antigravity-sdk": "latest",
+    "chrome-remote-interface": "^0.33.2",
+    "@modelcontextprotocol/sdk": "^1.27.0",
+    "zod": "^3.23.0"
   }
 }

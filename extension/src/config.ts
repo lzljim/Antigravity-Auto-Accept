@@ -55,6 +55,25 @@ export class Config implements vscode.Disposable {
         return this.cfg.get<number>('autoRetry.maxRetries', 3);
     }
 
+    get cdpPort(): number {
+        return this.cfg.get<number>('cdpPort', 9222);
+    }
+
+    get buttonTexts(): string[] {
+        return this.cfg.get<string[]>('buttonTexts', [
+            'Run',
+            'Allow This Conversation',
+            'Always Allow',
+            'Allow Once',
+            'Accept all',
+            'Accept',
+        ]);
+    }
+
+    get retryButtonTexts(): string[] {
+        return this.cfg.get<string[]>('autoRetry.retryButtonTexts', ['Retry']);
+    }
+
     get monitorPollInterval(): number {
         return this.cfg.get<number>('monitorPollInterval', 3000);
     }

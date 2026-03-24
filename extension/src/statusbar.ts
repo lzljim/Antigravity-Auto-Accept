@@ -81,6 +81,7 @@ export class StatusBarManager implements vscode.Disposable {
             this.item.tooltip = [
                 `✅ 已接受: ${this._acceptCount}`,
                 `🔄 已重试: ${this._retryCount}`,
+                `📡 模式: SDK信号 + CDP执行`,
                 '',
                 '点击切换开关（Ctrl+Shift+A）',
             ].join('\n');
