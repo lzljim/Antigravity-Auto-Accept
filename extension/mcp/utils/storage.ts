@@ -1,9 +1,6 @@
 import { readFile, writeFile, mkdir, readdir, unlink } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
  * 数据根目录：项目根目录下的 .mcp-data/

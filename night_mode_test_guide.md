@@ -13,7 +13,57 @@
 
 **测试步骤**：
 1. **启动测试环境**：
-   在 `extension` 目录下按 `F5` 启动“Extension Development Host”（调试宿主）。
+
+   > **⚠️ 注意**：`F5` 调试必须满足两个前提：
+   > 1. VS Code **当前工作区根目录**必须是 `extension/` 子目录（不是项目根目录）。
+   > 2. `extension/.vscode/launch.json` 必须存在。
+
+   **首次设置（只需做一次）：**
+
+   **步骤 A**：在 `extension/` 目录下新建 `.vscode/launch.json`，内容如下：
+   ```json
+   {
+     "version": "0.2.0",
+     "configurations": [
+       {
+         "name": "Run Extension",
+         "type": "extensionHost",
+         "request": "launch",
+         "args": [
+           "--extensionDevelopmentPath=${workspaceFolder}"
+         ],
+         "outFiles": [
+           "${workspaceFolder}/dist/**/*.js"
+         ],
+         "preLaunchTask": "npm: build"
+       }
+     ]
+   }
+   ```
+
+   **步骤 B**：在 `extension/` 目录下新建 `.vscode/tasks.json`，用于在启动前自动构建：
+   ```json
+   {
+     "version": "2.0.0",
+     "tasks": [
+       {
+         "type": "npm",
+         "script": "build",
+         "group": "build",
+         "label": "npm: build",
+         "detail": "node esbuild.js"
+       }
+     ]
+   }
+   ```
+
+   **步骤 C**：用 VS Code 打开 `extension/` 子目录：
+   ```
+   code d:\lzl\work\dev\Antigravity-Auto-Accept\extension
+   ```
+   > 也可以在 VS Code 中选择菜单 **文件 → 打开文件夹…** 并选择 `extension/` 目录。
+
+   **步骤 D**：按 `F5`（或菜单 **运行 → 启动调试**），VS Code 会自动执行 `npm run build` 构建，然后弹出一个新的"Extension Development Host"窗口。
 2. **命令测试**：
    在调试宿主中按 `Ctrl+Shift+P` 运行命令：`Auto Accept: Toggle Night Mode 🌙`。
 3. **日志查验**：

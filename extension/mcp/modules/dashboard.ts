@@ -3,11 +3,8 @@ import { z } from 'zod';
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { watch, FSWatcher, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { readAllJSON, readJSON, writeJSON, PATHS } from '../utils/storage.js';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ─── 数据结构（与其他模块保持一致） ─────────────────────────────
 
@@ -358,7 +355,13 @@ export async function startDashboard(port: number = DEFAULT_PORT): Promise<strin
   await new Promise<void>((resolve, reject) => {
     httpServer!.once('error', (err: NodeJS.ErrnoException) => {
       httpServer = null;
-      reject(err);
+      if (err.code === 'EADDRINUSE') {
+        // 端口已被另一个 MCP 实例占用（通常是 Antigravity IDE 直接通过 stdio 启动的那个）
+        // 静默复用，直接返回 URL，不报错也不退出
+        resolve();
+      } else {
+        reject(err);
+      }
     });
     httpServer!.listen(port, () => resolve());
   });

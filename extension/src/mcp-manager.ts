@@ -1,18 +1,19 @@
-import { spawn, ChildProcess } from 'child_process';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { Logger } from './logger';
 
 /**
- * MCP Server 进程管理器
+ * MCP Server 配置管理器
  *
- * 管理内置 MCP Server 子进程的生命周期：
- *   - 自动启动 node dist/mcp-server.mjs
- *   - 自动写入 ~/.gemini/antigravity/mcp_config.json
- *   - 优雅降级：MCP 启动失败不影响核心功能
+ * 职责：将 mcp-server.mjs 的路径写入 ~/.gemini/antigravity/mcp_config.json，
+ * 由 Antigravity IDE 负责按需启动和回收 MCP Server 进程（MCP 协议规范）。
+ *
+ * 不在这里 spawn 子进程，原因：
+ *   - MCP 协议规定 Client（IDE）负责启动 Server
+ *   - VS Code 扩展 spawn 会造成双实例冲突（端口 EADDRINUSE）
+ *   - 进程生命周期应由 IDE 管理，IDE 退出时自动回收
  */
 export class McpManager {
-    private process: ChildProcess | null = null;
     private extensionPath: string;
     private logger: Logger;
 
@@ -22,85 +23,37 @@ export class McpManager {
     }
 
     /**
-     * 启动 MCP Server 子进程
+     * 写入 MCP 配置，让 Antigravity IDE 知道从哪里启动 MCP Server。
+     * 实际进程由 IDE 负责启动，这里不 spawn。
      */
     async start(): Promise<boolean> {
         try {
             this.ensureMcpConfig();
-        } catch (e: any) {
-            this.logger.info(`[MCP] 配置写入失败（非致命）: ${e.message}`);
-        }
-
-        const serverPath = join(this.extensionPath, 'dist', 'mcp-server.mjs');
-        if (!existsSync(serverPath)) {
-            this.logger.info(`[MCP] 服务端文件不存在: ${serverPath}，跳过启动`);
-            return false;
-        }
-
-        try {
-            this.process = spawn('node', [serverPath], {
-                stdio: ['pipe', 'pipe', 'pipe'],
-                cwd: this.extensionPath, // 确保 node_modules 中的 external 依赖可被找到
-                env: { ...process.env, NODE_NO_WARNINGS: '1' },
-            });
-
-            this.process.stderr?.on('data', (d: Buffer) => {
-                this.logger.info(`[MCP] ${d.toString().trim()}`);
-            });
-
-            this.process.stdout?.on('data', (d: Buffer) => {
-                this.logger.debug(`[MCP:stdout] ${d.toString().trim()}`);
-            });
-
-            this.process.on('exit', (code) => {
-                this.logger.info(`[MCP] 进程退出 (code: ${code})`);
-                this.process = null;
-            });
-
-            this.process.on('error', (err) => {
-                this.logger.error(`[MCP] 进程错误: ${err.message}`);
-                this.process = null;
-            });
-
-            this.logger.info('[MCP] Server 已启动');
+            this.logger.info('[MCP] 配置已就绪，等待 Antigravity IDE 启动 Server');
             return true;
         } catch (e: any) {
-            this.logger.error(`[MCP] 启动失败: ${e.message}`);
+            this.logger.info(`[MCP] 配置写入失败（非致命）: ${e.message}`);
             return false;
         }
     }
 
-    /**
-     * 停止 MCP Server 子进程
-     */
-    stop(): void {
-        if (this.process) {
-            this.process.kill();
-            this.process = null;
-            this.logger.info('[MCP] Server 已停止');
-        }
-    }
+    /** 兼容接口，无实际操作（进程由 IDE 管理）*/
+    stop(): void { /* no-op */ }
 
-    /**
-     * 重启 MCP Server
-     */
+    /** 兼容接口 */
     async restart(): Promise<boolean> {
-        this.stop();
         return this.start();
     }
 
-    /**
-     * 获取 MCP Server 运行状态
-     */
+    /** 兼容接口 */
     get running(): boolean {
-        return this.process !== null && this.process.exitCode === null;
+        return false; // 进程不在本扩展管控范围内
     }
 
     /**
-     * 自动写入 ~/.gemini/antigravity/mcp_config.json
+     * 写入 ~/.gemini/antigravity/mcp_config.json
      *
-     * 确保 Antigravity IDE 能发现并连接内置 MCP Server。
-     * 仅在配置不存在或路径不匹配时才写入。
+     * 仅在路径不匹配时更新配置，避免不必要的文件写入。
      */
     private ensureMcpConfig(): void {
         const userProfile = process.env.USERPROFILE || process.env.HOME || '';
@@ -113,7 +66,6 @@ export class McpManager {
         const configPath = join(configDir, 'mcp_config.json');
         const serverPath = join(this.extensionPath, 'dist', 'mcp-server.mjs');
 
-        // 读取现有配置
         let config: any = { mcpServers: {} };
         if (existsSync(configPath)) {
             try {
@@ -126,13 +78,11 @@ export class McpManager {
             config.mcpServers = {};
         }
 
-        // 检查是否已有正确配置
         const existing = config.mcpServers['local-assistant'];
         if (existing?.command === 'node' && existing?.args?.[0] === serverPath) {
             return; // 已配置，无需更新
         }
 
-        // 写入配置
         config.mcpServers['local-assistant'] = {
             command: 'node',
             args: [serverPath],
