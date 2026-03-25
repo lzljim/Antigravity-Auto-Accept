@@ -290,3 +290,103 @@ export function buildSwitchModelScript(targetModelName: string): string {
         return { success: false, error: 'target model not found in dropdown' };
     })()`;
 }
+
+// ============================================================
+//  空闲检测脚本（注入到 Agent Panel，判断会话是否完成任务）
+// ============================================================
+
+/**
+ * 构建空闲检测脚本：
+ *   - 检查输入框是否可交互
+ *   - 检查是否有正在执行的操作
+ *   - 检查最后一条消息是否来自 AI
+ *   - 综合判定会话是否处于"空闲等待用户输入"状态
+ */
+export function buildIdleDetectionScript(): string {
+    return `(() => {
+        // 信号 1: 输入框可交互
+        const inputBox = document.querySelector(
+            '[contenteditable="true"]'
+        );
+        const inputReady = !!(inputBox && !inputBox.closest('[aria-disabled="true"]'));
+
+        // 信号 2: 无正在执行的操作（loading/spinning 指示器）
+        const runningIndicators = document.querySelectorAll(
+            '.animate-spin, [class*="loading"], [class*="progress"]'
+        );
+        const hasRunning = runningIndicators.length > 0;
+
+        // 信号 3: 检查是否有 "Run" 或 "Accept" 等待确认按钮（说明 AI 还在工作）
+        const pendingBtns = document.querySelectorAll('button:not([disabled])');
+        let hasPendingAction = false;
+        for (const btn of pendingBtns) {
+            const t = (btn.textContent || '').trim().toLowerCase();
+            if (['run', 'accept', 'accept all'].includes(t)) {
+                hasPendingAction = true;
+                break;
+            }
+        }
+
+        // 信号 4: 检查 Retry 按钮（说明任务出错，也算"空闲"需要处理）
+        let hasRetry = false;
+        for (const btn of pendingBtns) {
+            if ((btn.textContent || '').trim() === 'Retry') {
+                hasRetry = true;
+                break;
+            }
+        }
+
+        // 综合判定：输入框就绪 + 无正在执行 + 无待确认按钮 + 无 Retry
+        const isIdle = inputReady && !hasRunning && !hasPendingAction && !hasRetry;
+
+        return {
+            inputReady,
+            hasRunning,
+            hasPendingAction,
+            hasRetry,
+            isIdle,
+            timestamp: Date.now(),
+        };
+    })()`;
+}
+
+// ============================================================
+//  额度耗尽检测脚本
+// ============================================================
+
+/**
+ * 构建额度耗尽检测脚本：
+ *   - 检测速率限制 / 额度超限相关的 UI 提示
+ *   - 检测错误横幅
+ */
+export function buildQuotaExhaustionDetectionScript(): string {
+    return `(() => {
+        const allText = document.body?.innerText || '';
+        const indicators = [
+            /rate.?limit/i,
+            /quota.?exceed/i,
+            /too.?many.?requests/i,
+            /try.?again.?later/i,
+            /usage.?limit/i,
+            /resource.?exhaust/i,
+        ];
+
+        const hasRateLimit = indicators.some(re => re.test(allText));
+
+        const errorBanners = document.querySelectorAll(
+            '[class*="error"], [class*="warning"], [role="alert"]'
+        );
+        let errorText = '';
+        for (const el of errorBanners) {
+            errorText += ' ' + (el.textContent || '');
+        }
+        const bannerHasLimit = indicators.some(re => re.test(errorText));
+
+        return {
+            hasRateLimit: hasRateLimit || bannerHasLimit,
+            errorText: errorText.substring(0, 200).trim(),
+            timestamp: Date.now(),
+        };
+    })()`;
+}
+

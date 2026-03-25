@@ -55,6 +55,22 @@ export class CDPTargetManager {
         return this._connected;
     }
 
+    /** 获取指定 target 的持久连接（供 IdleDetector / CDPMessenger 使用） */
+    getConnection(targetId: string): { client: any; info: any; ready: boolean } | undefined {
+        return this.connections.get(targetId);
+    }
+
+    /** 获取所有持久连接的 target 信息 */
+    getConnectedTargets(): Array<{ targetId: string; info: any; ready: boolean }> {
+        const result: Array<{ targetId: string; info: any; ready: boolean }> = [];
+        for (const [id, conn] of this.connections) {
+            if (conn.ready) {
+                result.push({ targetId: id, info: conn.info, ready: conn.ready });
+            }
+        }
+        return result;
+    }
+
     /**
      * 初始化 CDP 客户端库
      */

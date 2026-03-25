@@ -39,6 +39,14 @@
       {
         "command": "autoAccept.openDashboard",
         "title": "Auto Accept: Open Dashboard"
+      },
+      {
+        "command": "autoAccept.nightMode.toggle",
+        "title": "Auto Accept: Toggle Night Mode 🌙"
+      },
+      {
+        "command": "autoAccept.nightMode.report",
+        "title": "Auto Accept: Night Mode Report 🌅"
       }
     ],
     "viewsContainers": {
@@ -157,6 +165,51 @@
           ],
           "default": "info",
           "description": "日志级别"
+        },
+        "autoAccept.nightMode.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "启用夜间模式（在预设时间内自动激活任务派发）"
+        },
+        "autoAccept.nightMode.autoActivateHour": {
+          "type": "number",
+          "default": 23,
+          "minimum": 0,
+          "maximum": 23,
+          "description": "自动激活夜间模式的小时（24h 制）"
+        },
+        "autoAccept.nightMode.autoDeactivateHour": {
+          "type": "number",
+          "default": 9,
+          "minimum": 0,
+          "maximum": 23,
+          "description": "自动停止夜间模式的小时（24h 制）"
+        },
+        "autoAccept.nightMode.maxTaskDurationMinutes": {
+          "type": "number",
+          "default": 120,
+          "minimum": 10,
+          "maximum": 480,
+          "description": "单个任务最大执行时间（分钟），超时自动跳过"
+        },
+        "autoAccept.nightMode.nightSafeOnly": {
+          "type": "boolean",
+          "default": true,
+          "description": "夜间模式仅执行带有 night-safe 标签的任务"
+        },
+        "autoAccept.nightMode.idleThresholdSeconds": {
+          "type": "number",
+          "default": 60,
+          "minimum": 15,
+          "maximum": 300,
+          "description": "会话空闲检测阈值（秒）"
+        },
+        "autoAccept.nightMode.quotaWindowHours": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 24,
+          "description": "Token 额度刷新窗口时长（小时）"
         }
       }
     }

@@ -12,6 +12,7 @@ export class StatusBarManager implements vscode.Disposable {
     private _retryCount = 0;
     private _connected = false;
     private _error: string | undefined = undefined;
+    private _nightMode: string = 'off';
     private config: Config;
 
     constructor(config: Config) {
@@ -55,6 +56,11 @@ export class StatusBarManager implements vscode.Disposable {
         this.update();
     }
 
+    setNightMode(mode: string): void {
+        this._nightMode = mode;
+        this.update();
+    }
+
     resetCounts(): void {
         this._acceptCount = 0;
         this._retryCount = 0;
@@ -63,6 +69,7 @@ export class StatusBarManager implements vscode.Disposable {
 
     private update(): void {
         const enabled = this.config.enabled;
+        const nightSuffix = this._nightMode !== 'off' ? ' 🌙' : '';
 
         if (!enabled) {
             this.item.text = '$(circle-slash) Auto Accept: OFF';
@@ -77,14 +84,15 @@ export class StatusBarManager implements vscode.Disposable {
             this.item.tooltip = '正在连接 Antigravity SDK...';
             this.item.backgroundColor = undefined;
         } else {
-            this.item.text = `$(check) Auto Accept: ${this._acceptCount}`;
+            this.item.text = `$(check) Auto Accept: ${this._acceptCount}${nightSuffix}`;
             this.item.tooltip = [
                 `✅ 已接受: ${this._acceptCount}`,
                 `🔄 已重试: ${this._retryCount}`,
                 `📡 模式: SDK信号 + CDP执行`,
+                this._nightMode !== 'off' ? `🌙 夜间模式: ${this._nightMode}` : '',
                 '',
                 '点击打开 Dashboard | 切换开关: Ctrl+Shift+A',
-            ].join('\n');
+            ].filter(Boolean).join('\n');
             this.item.backgroundColor = undefined;
         }
     }

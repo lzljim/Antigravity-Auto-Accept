@@ -82,6 +82,36 @@ export class Config implements vscode.Disposable {
         return this.cfg.get<LogLevel>('logLevel', 'info');
     }
 
+    // ── 夜间模式配置 ──
+
+    get nightModeEnabled(): boolean {
+        return this.cfg.get<boolean>('nightMode.enabled', false);
+    }
+
+    get autoActivateHour(): number {
+        return this.cfg.get<number>('nightMode.autoActivateHour', 23);
+    }
+
+    get autoDeactivateHour(): number {
+        return this.cfg.get<number>('nightMode.autoDeactivateHour', 9);
+    }
+
+    get maxTaskDurationMinutes(): number {
+        return this.cfg.get<number>('nightMode.maxTaskDurationMinutes', 120);
+    }
+
+    get nightSafeOnly(): boolean {
+        return this.cfg.get<boolean>('nightMode.nightSafeOnly', true);
+    }
+
+    get idleThresholdSeconds(): number {
+        return this.cfg.get<number>('nightMode.idleThresholdSeconds', 60);
+    }
+
+    get quotaWindowHours(): number {
+        return this.cfg.get<number>('nightMode.quotaWindowHours', 5);
+    }
+
     /** 切换 enabled 状态 */
     async toggle(): Promise<boolean> {
         const newValue = !this.enabled;

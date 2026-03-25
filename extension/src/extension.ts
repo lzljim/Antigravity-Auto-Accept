@@ -8,6 +8,7 @@ import { EventBus } from './event-bus';
 import { CDPRenamer } from './cdp-renamer';
 import { McpManager } from './mcp-manager';
 import { DashboardViewProvider } from './webview-provider';
+import { NightPilot } from './night-pilot';
 
 /**
  * Antigravity Auto-Accept Extension
@@ -19,6 +20,7 @@ import { DashboardViewProvider } from './webview-provider';
 
 let acceptor: AutoAcceptor | undefined;
 let mcpManager: McpManager | undefined;
+let nightPilot: NightPilot | undefined;
 
 export async function activate(context: vscode.ExtensionContext) {
     const logger = new Logger();
@@ -71,6 +73,16 @@ export async function activate(context: vscode.ExtensionContext) {
         logger.info(`[MCP] 启动失败（非致命）: ${e.message}`);
     });
 
+    // ---- 夜间调度 ----
+    nightPilot = new NightPilot(
+        config, logger, eventBus,
+        acceptor.cdpManager,
+        context.extensionPath,
+    );
+
+    // 夜间模式状态同步到状态栏
+    eventBus.onNightMode((e) => statusBar.setNightMode(e.mode));
+
     // ---- 注册命令 ----
     context.subscriptions.push(
         vscode.commands.registerCommand('autoAccept.toggle', () => {
@@ -94,10 +106,19 @@ export async function activate(context: vscode.ExtensionContext) {
             exploreApi(acceptor!, sdk, logger);
         }),
 
+        vscode.commands.registerCommand('autoAccept.nightMode.toggle', () => {
+            nightPilot?.toggle();
+        }),
+
+        vscode.commands.registerCommand('autoAccept.nightMode.report', () => {
+            nightPilot?.showReport();
+        }),
+
         config,
         statusBar,
         acceptor,
         logger,
+        nightPilot,
         { dispose: () => mcpManager?.stop() },
     );
 
@@ -111,6 +132,11 @@ export async function activate(context: vscode.ExtensionContext) {
             retryCount: statusBar.retryCount,
             running: true,
         });
+    }
+
+    // ---- 夜间模式自动激活检查 ----
+    if (config.nightModeEnabled) {
+        nightPilot.checkAutoActivate();
     }
 
     logger.info('🚀 Auto Accept 插件已就绪');

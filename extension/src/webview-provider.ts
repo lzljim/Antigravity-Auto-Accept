@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { EventBus, ClickEvent, RetryEvent } from './event-bus';
+import { EventBus, ClickEvent, RetryEvent, NightModeEvent, DispatchEvent, QuotaEvent } from './event-bus';
 
 /**
  * WebView Dashboard — 侧边栏面板
@@ -23,6 +23,9 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
         eventBus.onClick((e) => this.pushAndPost('click', e));
         eventBus.onRetry((e) => this.pushAndPost('retry', e));
         eventBus.onStatus((e) => this.post('status', e));
+        eventBus.onNightMode((e) => this.post('nightMode', e));
+        eventBus.onDispatch((e) => this.post('dispatch', e));
+        eventBus.onQuota((e) => this.post('quota', e));
     }
 
     resolveWebviewView(view: vscode.WebviewView): void {
@@ -202,6 +205,29 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
         </div>
     </div>
 
+    <div class="section" id="nightSection" style="display:none">
+        <div class="section-title">🌙 Night Mode</div>
+        <div class="status-bar" id="nightStatus">
+            <span id="nightIcon">⏸</span>
+            <span id="nightText">Off</span>
+            <span style="margin-left:auto" id="nightDetail"></span>
+        </div>
+        <div class="stats-grid" style="margin-top:8px">
+            <div class="stat-card">
+                <div class="stat-value" id="nightDispatched" style="color:#569cd6">0</div>
+                <div class="stat-label">Dispatched</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="nightQuota" style="color:#4ec9b0">--%</div>
+                <div class="stat-label">Quota Used</div>
+            </div>
+        </div>
+        <div class="controls" style="margin-top:8px">
+            <button class="btn btn-primary" onclick="send('nightMode.toggle')">🌙 Toggle Night Mode</button>
+            <button class="btn btn-secondary" onclick="send('nightMode.report')">🌅 View Report</button>
+        </div>
+    </div>
+
 <script>
     const vscode = acquireVsCodeApi();
     let acceptCount = 0;
@@ -261,6 +287,42 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
                 document.getElementById('acceptCount').textContent = acceptCount;
                 document.getElementById('retryCount').textContent = retryCount;
                 break;
+            case 'nightMode': {
+                const section = document.getElementById('nightSection');
+                const icon = document.getElementById('nightIcon');
+                const text = document.getElementById('nightText');
+                section.style.display = 'block';
+                const modeMap = {
+                    off: ['⏸', 'Off'],
+                    standby: ['⏳', 'Standby'],
+                    active: ['🟢', 'Active'],
+                    paused: ['⏸', 'Paused (Quota)'],
+                };
+                const m = modeMap[data.mode] || ['❓', data.mode];
+                icon.textContent = m[0];
+                text.textContent = m[1];
+                break;
+            }
+            case 'dispatch':
+                document.getElementById('nightSection').style.display = 'block';
+                const dc = document.getElementById('nightDispatched');
+                dc.textContent = parseInt(dc.textContent || '0') + 1;
+                addLogEntry('click', '🚀 ' + data.taskTitle, data.timestamp);
+                break;
+            case 'quota': {
+                const qEl = document.getElementById('nightQuota');
+                document.getElementById('nightSection').style.display = 'block';
+                if (data.type === 'exhausted') {
+                    qEl.textContent = '100%';
+                    qEl.style.color = '#f44747';
+                    addLogEntry('retry', '⚠️ Quota exhausted', data.timestamp);
+                } else if (data.type === 'refreshed') {
+                    qEl.textContent = '0%';
+                    qEl.style.color = '#4ec9b0';
+                    addLogEntry('click', '🔋 Quota refreshed', data.timestamp);
+                }
+                break;
+            }
         }
     });
 </script>
