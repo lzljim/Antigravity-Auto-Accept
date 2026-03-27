@@ -47,6 +47,22 @@
       {
         "command": "autoAccept.nightMode.report",
         "title": "Auto Accept: Night Mode Report 🌅"
+      },
+      {
+        "command": "autoAccept.pipeline.toggle",
+        "title": "Auto Accept: Toggle Pipeline 🏭"
+      },
+      {
+        "command": "autoAccept.pipeline.addTask",
+        "title": "Auto Accept: Add Task to Pipeline ➕"
+      },
+      {
+        "command": "autoAccept.pipeline.decompose",
+        "title": "Auto Accept: Decompose Task (AI) 🔬"
+      },
+      {
+        "command": "autoAccept.pipeline.addAndDecompose",
+        "title": "Auto Accept: Add & Decompose Task (AI) 🔬➕"
       }
     ],
     "viewsContainers": {
@@ -210,6 +226,59 @@
           "minimum": 1,
           "maximum": 24,
           "description": "Token 额度刷新窗口时长（小时）"
+        },
+        "autoAccept.pipeline.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "启用流水线调度模式（全天候自动任务派发）"
+        },
+        "autoAccept.pipeline.workspaces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "description": "工作空间名称" },
+              "branch": { "type": "string", "description": "Git 分支名" },
+              "pathPattern": { "type": "string", "description": "路径匹配模式" },
+              "sessions": { "type": "number", "default": 2, "description": "该工作空间的会话数" },
+              "preferredModels": { "type": "array", "items": { "type": "string" }, "description": "偏好模型列表" }
+            },
+            "required": ["name"]
+          },
+          "default": [],
+          "description": "工作空间配置列表（每个工作空间对应一个 git 分支）"
+        },
+        "autoAccept.pipeline.sessionsPerWorkspace": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 5,
+          "description": "每个工作空间的默认会话数"
+        },
+        "autoAccept.pipeline.workspaceIsolation": {
+          "type": "string",
+          "enum": ["strict", "flexible"],
+          "default": "strict",
+          "description": "strict: 任务只派发到匹配 workspace 的会话; flexible: 允许跨 workspace 派发"
+        },
+        "autoAccept.pipeline.taskTimeout": {
+          "type": "number",
+          "default": 120,
+          "minimum": 10,
+          "maximum": 480,
+          "description": "单任务超时时间（分钟）"
+        },
+        "autoAccept.pipeline.cooldownBetweenTasks": {
+          "type": "number",
+          "default": 5,
+          "minimum": 0,
+          "maximum": 60,
+          "description": "两次任务派发之间的冷却时间（秒）"
+        },
+        "autoAccept.pipeline.modelRouting.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用智能模型路由（根据任务难度自动选择 Opus/Sonnet/Gemini）"
         }
       }
     }

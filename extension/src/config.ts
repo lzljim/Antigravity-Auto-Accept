@@ -112,10 +112,53 @@ export class Config implements vscode.Disposable {
         return this.cfg.get<number>('nightMode.quotaWindowHours', 5);
     }
 
+    // ── Pipeline 配置 ──
+
+    get pipelineEnabled(): boolean {
+        return this.cfg.get<boolean>('pipeline.enabled', false);
+    }
+
+    get pipelineWorkspaces(): Array<{
+        name: string;
+        branch: string;
+        pathPattern: string;
+        sessions: number;
+        preferredModels: string[];
+    }> {
+        return this.cfg.get('pipeline.workspaces', []);
+    }
+
+    get sessionsPerWorkspace(): number {
+        return this.cfg.get<number>('pipeline.sessionsPerWorkspace', 2);
+    }
+
+    get workspaceIsolation(): 'strict' | 'flexible' {
+        return this.cfg.get<'strict' | 'flexible'>('pipeline.workspaceIsolation', 'strict');
+    }
+
+    get taskTimeout(): number {
+        return this.cfg.get<number>('pipeline.taskTimeout', 120);
+    }
+
+    get cooldownBetweenTasks(): number {
+        return this.cfg.get<number>('pipeline.cooldownBetweenTasks', 5);
+    }
+
+    get modelRoutingEnabled(): boolean {
+        return this.cfg.get<boolean>('pipeline.modelRouting.enabled', true);
+    }
+
     /** 切换 enabled 状态 */
     async toggle(): Promise<boolean> {
         const newValue = !this.enabled;
         await this.cfg.update('enabled', newValue, vscode.ConfigurationTarget.Global);
+        return newValue;
+    }
+
+    /** 切换 pipeline enabled */
+    async togglePipeline(): Promise<boolean> {
+        const newValue = !this.pipelineEnabled;
+        await this.cfg.update('pipeline.enabled', newValue, vscode.ConfigurationTarget.Global);
         return newValue;
     }
 

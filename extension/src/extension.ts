@@ -9,6 +9,7 @@ import { CDPRenamer } from './cdp-renamer';
 import { McpManager } from './mcp-manager';
 import { DashboardViewProvider } from './webview-provider';
 import { NightPilot } from './night-pilot';
+import { PipelineScheduler } from './pipeline-scheduler';
 
 /**
  * Antigravity Auto-Accept Extension
@@ -21,6 +22,7 @@ import { NightPilot } from './night-pilot';
 let acceptor: AutoAcceptor | undefined;
 let mcpManager: McpManager | undefined;
 let nightPilot: NightPilot | undefined;
+let pipelineScheduler: PipelineScheduler | undefined;
 
 export async function activate(context: vscode.ExtensionContext) {
     const logger = new Logger();
@@ -83,6 +85,18 @@ export async function activate(context: vscode.ExtensionContext) {
     // 夜间模式状态同步到状态栏
     eventBus.onNightMode((e) => statusBar.setNightMode(e.mode));
 
+    // ---- Pipeline 调度器 ----
+    pipelineScheduler = new PipelineScheduler(
+        config, logger, eventBus,
+        acceptor.cdpManager,
+        context.extensionPath,
+    );
+
+    // Pipeline 状态同步到状态栏
+    eventBus.onPipelineState((e) => {
+        statusBar.setPipelineStats(e.stats, e.mode);
+    });
+
     // ---- 注册命令 ----
     context.subscriptions.push(
         vscode.commands.registerCommand('autoAccept.toggle', () => {
@@ -114,11 +128,55 @@ export async function activate(context: vscode.ExtensionContext) {
             nightPilot?.showReport();
         }),
 
+        vscode.commands.registerCommand('autoAccept.pipeline.toggle', () => {
+            pipelineScheduler?.toggle();
+        }),
+
+        vscode.commands.registerCommand('autoAccept.pipeline.addTask', async (title?: string, workspace?: string) => {
+            // 如果从 Dashboard 传入了 title，直接使用
+            if (title) {
+                await pipelineScheduler?.addTask(title, workspace);
+                return;
+            }
+            // 否则弹出输入框
+            const input = await vscode.window.showInputBox({
+                prompt: '输入任务描述',
+                placeHolder: '例如：重构登录模块',
+            });
+            if (input) {
+                await pipelineScheduler?.addTask(input);
+            }
+        }),
+
+        vscode.commands.registerCommand('autoAccept.pipeline.decompose', async (taskId?: string) => {
+            if (!taskId) {
+                const input = await vscode.window.showInputBox({
+                    prompt: '输入要拆解的任务 ID',
+                });
+                if (!input) return;
+                taskId = input;
+            }
+            await pipelineScheduler?.decomposeTask(taskId);
+        }),
+
+        vscode.commands.registerCommand('autoAccept.pipeline.addAndDecompose', async (title?: string, workspace?: string) => {
+            if (!title) {
+                title = await vscode.window.showInputBox({
+                    prompt: '输入需求描述（AI 将自动拆解为子任务）',
+                    placeHolder: '例如：重构用户认证模块，支持 OAuth2 和 JWT',
+                }) || undefined;
+            }
+            if (title) {
+                await pipelineScheduler?.addAndDecompose(title, workspace);
+            }
+        }),
+
         config,
         statusBar,
         acceptor,
         logger,
         nightPilot,
+        pipelineScheduler,
         { dispose: () => mcpManager?.stop() },
     );
 
@@ -139,12 +197,20 @@ export async function activate(context: vscode.ExtensionContext) {
         nightPilot.checkAutoActivate();
     }
 
+    // ---- Pipeline 自动启动检查 ----
+    if (config.pipelineEnabled) {
+        pipelineScheduler.start().catch((e: any) => {
+            logger.info(`[Pipeline] 自动启动失败: ${e.message}`);
+        });
+    }
+
     logger.info('🚀 Auto Accept 插件已就绪');
 }
 
 export function deactivate() {
     acceptor?.stop();
     mcpManager?.stop();
+    pipelineScheduler?.stop();
 }
 
 /**

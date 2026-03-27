@@ -13,6 +13,8 @@ export class StatusBarManager implements vscode.Disposable {
     private _connected = false;
     private _error: string | undefined = undefined;
     private _nightMode: string = 'off';
+    private _pipelineStats: { queued: number; running: number; done: number } = { queued: 0, running: 0, done: 0 };
+    private _pipelineMode: string = 'off';
     private config: Config;
 
     constructor(config: Config) {
@@ -61,6 +63,12 @@ export class StatusBarManager implements vscode.Disposable {
         this.update();
     }
 
+    setPipelineStats(stats: { queued: number; running: number; done: number }, mode: string): void {
+        this._pipelineStats = stats;
+        this._pipelineMode = mode;
+        this.update();
+    }
+
     resetCounts(): void {
         this._acceptCount = 0;
         this._retryCount = 0;
@@ -70,6 +78,7 @@ export class StatusBarManager implements vscode.Disposable {
     private update(): void {
         const enabled = this.config.enabled;
         const nightSuffix = this._nightMode !== 'off' ? ' 🌙' : '';
+        const pipelineActive = this._pipelineMode !== 'off';
 
         if (!enabled) {
             this.item.text = '$(circle-slash) Auto Accept: OFF';
@@ -82,6 +91,23 @@ export class StatusBarManager implements vscode.Disposable {
         } else if (!this._connected) {
             this.item.text = '$(loading~spin) Auto Accept';
             this.item.tooltip = '正在连接 Antigravity SDK...';
+            this.item.backgroundColor = undefined;
+        } else if (pipelineActive) {
+            const { queued, running, done } = this._pipelineStats;
+            const pIcon = this._pipelineMode === 'paused' ? '$(debug-pause)' : '$(play)';
+            this.item.text = `${pIcon} Pipeline: Q${queued} R${running} D${done}`;
+            this.item.tooltip = [
+                `🏭 Pipeline: ${this._pipelineMode}`,
+                `📋 排队: ${queued}`,
+                `🔄 进行: ${running}`,
+                `✅ 完成: ${done}`,
+                '',
+                `✅ Auto Accept: ${this._acceptCount}`,
+                `🔄 Retried: ${this._retryCount}`,
+                this._nightMode !== 'off' ? `🌙 夜间模式: ${this._nightMode}` : '',
+                '',
+                '点击打开 Dashboard',
+            ].filter(Boolean).join('\n');
             this.item.backgroundColor = undefined;
         } else {
             this.item.text = `$(check) Auto Accept: ${this._acceptCount}${nightSuffix}`;

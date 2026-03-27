@@ -196,6 +196,7 @@ export class CDPTargetManager {
                 if (this.connections.has(t.id)) return false;
                 const url = t.url || '';
                 if (url.startsWith('http://') || url.startsWith('https://')) return false;
+                if (url.startsWith('vscode-webview://')) return false;
                 if (t.type === 'worker' || t.type === 'service_worker') return false;
                 return true;
             });
@@ -291,6 +292,7 @@ export class CDPTargetManager {
             if (this.connections.has(t.id)) return false;
             const url = t.url || '';
             if (url.startsWith('http://') || url.startsWith('https://')) return false;
+            if (url.startsWith('vscode-webview://')) return false;
             if (t.type === 'worker' || t.type === 'service_worker') return false;
             return true;
         });

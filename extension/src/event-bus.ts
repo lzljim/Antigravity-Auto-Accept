@@ -62,6 +62,41 @@ export interface QuotaEvent {
     timestamp: number;
 }
 
+// ── Pipeline 事件类型 ──
+
+export type PipelineMode = 'off' | 'running' | 'paused';
+
+export interface WorkspaceSessionState {
+    targetId: string;
+    targetTitle: string;
+    workspace: string;
+    taskId?: string;
+    taskTitle?: string;
+    model?: string;
+    status: 'idle' | 'busy' | 'error';
+}
+
+export interface PipelineStateEvent {
+    mode: PipelineMode;
+    workspaces: Array<{
+        name: string;
+        branch: string;
+        sessions: WorkspaceSessionState[];
+        queueCount: number;
+    }>;
+    stats: { queued: number; running: number; done: number; blocked: number };
+    timestamp: number;
+}
+
+export interface TaskNotifyEvent {
+    type: 'completed' | 'failed' | 'blocked' | 'dispatched';
+    taskId: string;
+    taskTitle: string;
+    workspace: string;
+    durationMs?: number;
+    timestamp: number;
+}
+
 /**
  * 事件总线 — 解耦核心层与 UI 层
  *
@@ -89,4 +124,11 @@ export class EventBus extends EventEmitter {
     onTaskComplete(fn: (e: TaskCompleteEvent) => void): void { this.on('taskComplete', fn); }
     onNightMode(fn: (e: NightModeEvent) => void): void { this.on('nightMode', fn); }
     onQuota(fn: (e: QuotaEvent) => void): void { this.on('quota', fn); }
+
+    // ── Pipeline 事件 ──
+    emitPipelineState(e: PipelineStateEvent): void { this.emit('pipelineState', e); }
+    emitTaskNotify(e: TaskNotifyEvent): void { this.emit('taskNotify', e); }
+
+    onPipelineState(fn: (e: PipelineStateEvent) => void): void { this.on('pipelineState', fn); }
+    onTaskNotify(fn: (e: TaskNotifyEvent) => void): void { this.on('taskNotify', fn); }
 }
